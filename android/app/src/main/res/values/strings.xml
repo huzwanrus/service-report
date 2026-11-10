@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">JN Service Report</string>
+    <string name="title_activity_main">JN Service Report</string>
+    <string name="package_name">com.bizmedic.servicereport</string>
+    <string name="custom_url_scheme">com.bizmedic.servicereport</string>
+</resources>

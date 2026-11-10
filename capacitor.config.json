@@ -1,0 +1,6 @@
+{
+  "appId": "com.bizmedic.servicereport",
+  "appName": "JN Service Report",
+  "webDir": "www",
+  "android": { "allowMixedContent": false }
+}
