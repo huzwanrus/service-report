@@ -88,3 +88,16 @@ Report yang sudah bernombor masih boleh diedit. Nombornya kekal dan server dikem
 - **Nama, alamat dan jenis kerja:** ubah `COMPANY` dan `WORK_TYPES` di bahagian atas `www/app.js`.
 - **Logo:** gantikan `www/logo.jpg`.
 - **Selepas mengubah fail app:** naikkan `CACHE` dalam `www/sw.js` (contohnya `jn-sr-v1.0.1`) supaya phone memuat versi baharu.
+
+---
+
+## Quotation (versi 1.2.0)
+
+Tab **Quotation** di skrin utama menghasilkan quotation dengan format asal Biz Medic: kepala surat penuh, fon Times, jadual ITEM / DESCRIPTIONS / QTY / UNIT PRICE / TOTAL PRICE, Validity dan cop syarikat.
+
+- **Nombor:** `QOYYYY/MM/NNN`, contohnya `QO2026/11/001`. NNN bermula dari 001 setiap bulan, ikut bulan pada tarikh quotation. Nombor dikeluarkan oleh server dan dikongsi oleh semua engineer.
+- **Rekod:** Disimpan dalam tab **Quotations** dalam Google Sheet yang sama. Tab ini dicipta automatik.
+- **Dari service report:** Butang **Buat quotation daripada report ini** mengisi alamat client dan item (equipment dan serial no.) secara automatik.
+- **Cop:** Gambar dan saiz cop boleh ditukar dalam **Tetapan > Cop Quotation**. Tetapan ini untuk phone itu sahaja.
+
+**Kemas kini server (sekali sahaja):** Gantikan kod dalam Apps Script dengan `apps-script/Code.gs` terbaru, tetapi kekalkan TOKEN anda. Kemudian pergi ke **Deploy > Manage deployments > Edit (ikon pensel) > Version: New version > Deploy**. URL web app kekal sama. Selagi langkah ini belum dibuat, quotation boleh diisi dan disimpan dalam phone tetapi belum mendapat nombor.

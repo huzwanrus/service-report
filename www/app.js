@@ -4,7 +4,7 @@
  * Nombor report (JNA001, JNA002 ... JNB001) dikeluarkan oleh server supaya
  * tidak bertindih antara engineer.
  */
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.2.0';
 const WORK_TYPES = ['Installation', 'PPM', 'Repair Service', 'Corrective'];
 const COMPANY = {
   name: 'Biz Medic Sdn Bhd',
@@ -38,8 +38,13 @@ const DB = {
   db: null,
   open() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('jn-service-report', 1);
-      r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('reports', { keyPath: 'id' }); d.createObjectStore('meta'); };
+      const r = indexedDB.open('jn-service-report', 2);
+      r.onupgradeneeded = () => {
+        const d = r.result, has = n => d.objectStoreNames.contains(n);
+        if (!has('reports')) d.createObjectStore('reports', { keyPath: 'id' });
+        if (!has('meta')) d.createObjectStore('meta');
+        if (!has('quotes')) d.createObjectStore('quotes', { keyPath: 'id' });
+      };
       r.onsuccess = () => { this.db = r.result; res(); };
       r.onerror = () => rej(r.error);
     });
@@ -55,6 +60,10 @@ const DB = {
   get(id) { return this.tx('reports', 'readonly', s => s.get(id)); },
   put(r) { return this.tx('reports', 'readwrite', s => s.put(r)); },
   del(id) { return this.tx('reports', 'readwrite', s => s.delete(id)); },
+  qall() { return this.tx('quotes', 'readonly', s => s.getAll()); },
+  qget(id) { return this.tx('quotes', 'readonly', s => s.get(id)); },
+  qput(q) { return this.tx('quotes', 'readwrite', s => s.put(q)); },
+  qdel(id) { return this.tx('quotes', 'readwrite', s => s.delete(id)); },
   getMeta(k) { return this.tx('meta', 'readonly', s => s.get(k)); },
   setMeta(k, v) { return this.tx('meta', 'readwrite', s => s.put(v, k)); }
 };
@@ -115,18 +124,28 @@ async function sync({ quiet = false } = {}) {
     await DB.setMeta('lastPull', max);
     await DB.setMeta('lastSync', new Date().toISOString());
   } catch (e) { err = e; }
+  let qsent = 0;
+  if (!err) {
+    try { const q = await syncQuotes(); qsent = q.sent; pulled += q.pulled; }
+    catch (e) {
+      const pend = (await DB.qall()).some(q => q.status === 'pending');
+      if (/Action tidak dikenali/.test(e.message)) {
+        if (pend) err = new Error('Server belum dikemas kini untuk quotation. Kemas kini Code.gs dan deploy versi baharu.');
+      } else err = e;
+    }
+  }
   syncing = false;
   await updatePill(err);
   if (err && !quiet) toast('Gagal sync: ' + err.message, 3500);
-  else if (sent && !quiet) toast(sent === 1 ? 'Report dihantar ke server' : sent + ' report dihantar');
+  else if ((sent || qsent) && !quiet) toast([sent ? sent + ' report' : '', qsent ? qsent + ' quotation' : ''].filter(Boolean).join(' dan ') + ' dihantar ke server');
   const page = (location.hash || '#/').split('/')[1] || '';
-  if (!err && (sent || pulled) && (page === '' || page === 'view')) route();
-  return { sent, pulled, err };
+  if (!err && (sent || qsent || pulled) && ['', 'view', 'q', 'qview'].includes(page)) route();
+  return { sent, qsent, pulled, err };
 }
 
 async function updatePill(err) {
   const p = $('#pill');
-  const n = (await DB.all()).filter(r => r.status === 'pending').length;
+  const n = (await DB.all()).filter(r => r.status === 'pending').length + (await DB.qall()).filter(q => q.status === 'pending').length;
   p.className = 'pill';
   if (syncing) { p.textContent = 'Sync…'; return; }
   if (!navigator.onLine) { p.textContent = n ? `Offline · ${n} menunggu` : 'Offline'; p.classList.add('off'); return; }
@@ -138,19 +157,24 @@ async function updatePill(err) {
 
 /* ---------------- Router ---------------- */
 async function route() {
-  await flushSave();
-  cur = null;
+  await flushSave(); await qFlushSave();
+  cur = null; qcur = null;
   const parts = (location.hash || '#/').split('/');
   const page = parts[1] || '', id = decodeURIComponent(parts[2] || '');
+  const top = page === '' || page === 'q';
   window.scrollTo(0, 0);
-  $('#backBtn').hidden = page === '';
-  $('#brand').hidden = page !== '';
+  $('#backBtn').hidden = top;
+  $('#brand').hidden = !top;
   $('#setBtn').hidden = page === 'settings';
   try {
     if (page === 'new') return newReport();
     if (page === 'edit') return renderEdit(id);
     if (page === 'view') return renderView(id);
     if (page === 'settings') return renderSettings();
+    if (page === 'q') return renderQList();
+    if (page === 'qnew') return newQuote();
+    if (page === 'qedit') return renderQEdit(id);
+    if (page === 'qview') return renderQView(id);
     return renderList();
   } finally { updatePill(); }
 }
@@ -184,6 +208,7 @@ async function renderList() {
   const counts = { draft: all.filter(r => r.status === 'draft').length, pending: all.filter(r => r.status === 'pending').length };
   const chip = (k, label) => `<button data-f="${k}" class="${ui.filter === k ? 'on' : ''}">${label}</button>`;
   $('#app').innerHTML = `
+    ${tabsHTML('r')}
     ${!S.url ? `<div class="banner">Server belum ditetapkan. Report boleh diisi dan disimpan dalam phone, tetapi nombor report hanya dikeluarkan selepas disambung ke server. <a href="#/settings">Buka Tetapan</a></div>` : ''}
     <div class="search"><input id="q" type="search" placeholder="Cari no. report, client, equipment, serial…" value="${esc(ui.q)}"></div>
     <div class="chips">
@@ -417,6 +442,7 @@ async function renderView(id) {
       ${isNative() ? '' : `<button class="btn ${canShare ? '' : 'p'}" id="dlBtn">Muat turun PDF</button>`}
       <button class="btn" id="editBtn">${r.status === 'draft' ? 'Sambung isi' : 'Edit'}</button>
       <button class="btn" id="dupBtn">Salin ke report baharu</button>
+      <button class="btn" id="mkQuote" style="grid-column:1/-1">Buat quotation daripada report ini</button>
       ${r.status === 'pending' ? `<button class="btn" id="syncBtn" style="grid-column:1/-1">Hantar ke server sekarang</button>` : ''}
     </div>
     ${r.status === 'draft' ? `<div class="banner">Draf ini belum dihantar. Tekan <b>Sambung isi</b> kemudian <b>Hantar &amp; Dapat No.</b> untuk mendapat nombor report.</div>` : ''}
@@ -444,6 +470,7 @@ async function renderView(id) {
     equipment: r.equipment, model: r.model, serial: r.serial, warranty: r.warranty
   });
   if ($('#syncBtn')) $('#syncBtn').onclick = () => sync();
+  $('#mkQuote').onclick = () => quoteFromReport(r);
 }
 
 /* ---------------- Signature pad ---------------- */
@@ -806,6 +833,8 @@ async function renderSettings() {
   setTitle('Tetapan');
   const lastSync = await DB.getMeta('lastSync');
   const all = await DB.all();
+  const allQ = await DB.qall();
+  const stampHTML = await stampSettingsHTML();
   $('#app').innerHTML = `
     <div class="sec">
       <h2>ENGINEER</h2>
@@ -817,6 +846,7 @@ async function renderSettings() {
       <label class="f"><span>Token</span><input id="sTok" value="${esc(S.token)}" type="password" autocapitalize="off" autocomplete="off"></label>
       <div class="hint">URL dan token yang sama digunakan oleh semua engineer, supaya nombor report dikongsi.</div>
     </div>
+    ${stampHTML}
     <div class="acts">
       <button class="btn p" id="sSave" style="grid-column:1/-1">Simpan tetapan</button>
       <button class="btn" id="sTest">Uji sambungan</button>
@@ -825,7 +855,7 @@ async function renderSettings() {
       ${installEvt ? `<button class="btn" id="sInstall">Pasang app</button>` : ''}
     </div>
     <div class="meta">
-      ${all.length} report dalam phone · Sync terakhir: ${lastSync ? esc(fmtDT(new Date(lastSync))) : 'belum'}<br>
+      ${all.length} report · ${allQ.length} quotation dalam phone · Sync terakhir: ${lastSync ? esc(fmtDT(new Date(lastSync))) : 'belum'}<br>
       Versi ${APP_VERSION}${isNative() ? ' (Android)' : ''}
     </div>`;
   const read = () => ({ engineer: $('#sEng').value.trim(), url: $('#sUrl').value.trim(), token: $('#sTok').value.trim() });
@@ -840,10 +870,11 @@ async function renderSettings() {
     S = old;
   };
   $('#sFull').onclick = async () => {
-    await DB.setMeta('lastPull', ''); const res = await sync();
+    await DB.setMeta('lastPull', ''); await DB.setMeta('lastQPull', ''); const res = await sync();
     if (res && !res.err) toast('Rekod dikemas kini (' + res.pulled + ' dari server)');
   };
   $('#sCsv').onclick = exportCSV;
+  bindStampSettings();
   if ($('#sInstall')) $('#sInstall').onclick = async () => { installEvt.prompt(); await installEvt.userChoice; installEvt = null; renderSettings(); };
 }
 
@@ -865,6 +896,7 @@ async function start() {
   await DB.open();
   S = { ...S, ...((await DB.getMeta('settings')) || {}) };
   try { LOGO = await blobToDataURL(await (await fetch('logo.jpg')).blob()); } catch (e) { LOGO = null; }
+  await loadQuoteAssets();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   initSig();
   initImgSig();
@@ -876,7 +908,7 @@ async function start() {
   window.addEventListener('hashchange', route);
   window.addEventListener('online', () => sync({ quiet: true }));
   window.addEventListener('offline', () => updatePill());
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sync({ quiet: true }); else flushSave(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sync({ quiet: true }); else { flushSave(); qFlushSave(); } });
   await route();
   sync({ quiet: true });
   setInterval(() => sync({ quiet: true }), 5 * 60 * 1000);
