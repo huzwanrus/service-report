@@ -4,7 +4,7 @@
  * Nombor report (JNA001, JNA002 ... JNB001) dikeluarkan oleh server supaya
  * tidak bertindih antara engineer.
  */
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 const WORK_TYPES = ['Installation', 'PPM', 'Repair Service', 'Corrective'];
 const COMPANY = {
   name: 'Biz Medic Sdn Bhd',
@@ -913,7 +913,7 @@ async function start() {
   sync({ quiet: true });
   setInterval(() => sync({ quiet: true }), 5 * 60 * 1000);
   if ('serviceWorker' in navigator && !isNative() && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => reg.update()).catch(() => {});
   }
 }
 start().catch(e => { document.getElementById('app').textContent = 'Ralat memulakan app: ' + e.message; });

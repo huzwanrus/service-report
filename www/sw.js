@@ -1,5 +1,5 @@
 /* Service worker: simpan fail app supaya boleh dibuka tanpa internet. */
-const CACHE = 'jn-sr-v1.2.0';
+const CACHE = 'jn-sr-v1.2.1';
 const FILES = ['./', 'index.html', 'app.js', 'quote.js', 'letterhead.jpg', 'stamp.png', 'jspdf.umd.min.js', 'logo.jpg', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png'];
 
@@ -15,7 +15,7 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;   // server Google tidak dicache
   // Rangkaian dahulu untuk fail app (dapat versi terbaru), cache bila offline
   e.respondWith(
-    fetch(e.request).then(res => {
+    fetch(e.request, { cache: 'no-cache' }).then(res => {   // sentiasa semak versi terbaru, abaikan cache HTTP
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(e.request, copy));
       return res;
