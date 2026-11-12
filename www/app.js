@@ -4,7 +4,7 @@
  * Nombor report (JNA001, JNA002 ... JNB001) dikeluarkan oleh server supaya
  * tidak bertindih antara engineer.
  */
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 const WORK_TYPES = ['Installation', 'PPM', 'Repair Service', 'Corrective'];
 const COMPANY = {
   name: 'Biz Medic Sdn Bhd',
@@ -160,7 +160,11 @@ function setTitle(t) { $('#title').textContent = t; document.title = t + ' · JN
 function sortReports(a, b) {
   const rank = r => (r.status === 'draft' ? 0 : r.reportNo ? 2 : 1);
   if (rank(a) !== rank(b)) return rank(a) - rank(b);
-  if (rank(a) === 2) return (b.reportNo || '').localeCompare(a.reportNo || '');
+  if (rank(a) === 2) {
+    // ikut tarikh servis (terbaru dahulu), kemudian nombor report
+    const d = (b.reportDate || '').localeCompare(a.reportDate || '');
+    return d || (b.reportNo || '').localeCompare(a.reportNo || '');
+  }
   return (b.updatedAt || '').localeCompare(a.updatedAt || '');
 }
 
