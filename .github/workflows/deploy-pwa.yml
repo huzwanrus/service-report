@@ -1,7 +1,7 @@
 name: Deploy PWA
 on:
-  # push:
-  #   branches: [main]  (aktifkan selepas GitHub Pages dihidupkan)
+  push:
+    branches: [main]
   workflow_dispatch: {}
 permissions:
   contents: read
