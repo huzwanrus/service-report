@@ -4,7 +4,7 @@
  * Nombor report (JNA001, JNA002 ... JNB001) dikeluarkan oleh server supaya
  * tidak bertindih antara engineer.
  */
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.3.0';
 const WORK_TYPES = ['Installation', 'PPM', 'Repair Service', 'Corrective'];
 const COMPANY = {
   name: 'Biz Medic Sdn Bhd',
@@ -38,12 +38,14 @@ const DB = {
   db: null,
   open() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('jn-service-report', 2);
+      const r = indexedDB.open('jn-service-report', 3);
       r.onupgradeneeded = () => {
         const d = r.result, has = n => d.objectStoreNames.contains(n);
         if (!has('reports')) d.createObjectStore('reports', { keyPath: 'id' });
         if (!has('meta')) d.createObjectStore('meta');
         if (!has('quotes')) d.createObjectStore('quotes', { keyPath: 'id' });
+        if (!has('claims')) d.createObjectStore('claims', { keyPath: 'id' });
+        if (!has('files')) d.createObjectStore('files', { keyPath: 'id' });
       };
       r.onsuccess = () => { this.db = r.result; res(); };
       r.onerror = () => rej(r.error);
@@ -64,6 +66,13 @@ const DB = {
   qget(id) { return this.tx('quotes', 'readonly', s => s.get(id)); },
   qput(q) { return this.tx('quotes', 'readwrite', s => s.put(q)); },
   qdel(id) { return this.tx('quotes', 'readwrite', s => s.delete(id)); },
+  call() { return this.tx('claims', 'readonly', s => s.getAll()); },
+  cget(id) { return this.tx('claims', 'readonly', s => s.get(id)); },
+  cput(c) { return this.tx('claims', 'readwrite', s => s.put(c)); },
+  cdel(id) { return this.tx('claims', 'readwrite', s => s.delete(id)); },
+  fget(id) { return this.tx('files', 'readonly', s => s.get(id)); },
+  fput(f) { return this.tx('files', 'readwrite', s => s.put(f)); },
+  fdel(id) { return this.tx('files', 'readwrite', s => s.delete(id)); },
   getMeta(k) { return this.tx('meta', 'readonly', s => s.get(k)); },
   setMeta(k, v) { return this.tx('meta', 'readwrite', s => s.put(v, k)); }
 };
@@ -134,18 +143,29 @@ async function sync({ quiet = false } = {}) {
       } else err = e;
     }
   }
+  let csent = 0;
+  if (!err) {
+    try { const c = await syncClaims(); csent = c.sent; pulled += c.pulled; }
+    catch (e) {
+      const pend = (await DB.call()).some(c => c.status === 'pending');
+      if (/Action tidak dikenali/.test(e.message)) {
+        if (pend) err = new Error('Server belum dikemas kini untuk claim. Kemas kini Code.gs dan deploy versi baharu.');
+      } else err = e;
+    }
+  }
   syncing = false;
   await updatePill(err);
   if (err && !quiet) toast('Gagal sync: ' + err.message, 3500);
-  else if ((sent || qsent) && !quiet) toast([sent ? sent + ' report' : '', qsent ? qsent + ' quotation' : ''].filter(Boolean).join(' dan ') + ' dihantar ke server');
+  else if ((sent || qsent || csent) && !quiet) toast([sent ? sent + ' report' : '', qsent ? qsent + ' quotation' : '', csent ? csent + ' claim' : ''].filter(Boolean).join(', ') + ' dihantar ke server');
   const page = (location.hash || '#/').split('/')[1] || '';
-  if (!err && (sent || qsent || pulled) && ['', 'view', 'q', 'qview'].includes(page)) route();
-  return { sent, qsent, pulled, err };
+  if (!err && (sent || qsent || csent || pulled) && ['', 'view', 'q', 'qview', 'c', 'cview'].includes(page)) route();
+  return { sent, qsent, csent, pulled, err };
 }
 
 async function updatePill(err) {
   const p = $('#pill');
-  const n = (await DB.all()).filter(r => r.status === 'pending').length + (await DB.qall()).filter(q => q.status === 'pending').length;
+  const n = (await DB.all()).filter(r => r.status === 'pending').length + (await DB.qall()).filter(q => q.status === 'pending').length
+    + (await DB.call()).filter(c => c.status === 'pending').length;
   p.className = 'pill';
   if (syncing) { p.textContent = 'Sync…'; return; }
   if (!navigator.onLine) { p.textContent = n ? `Offline · ${n} menunggu` : 'Offline'; p.classList.add('off'); return; }
@@ -157,11 +177,11 @@ async function updatePill(err) {
 
 /* ---------------- Router ---------------- */
 async function route() {
-  await flushSave(); await qFlushSave();
-  cur = null; qcur = null;
+  await flushSave(); await qFlushSave(); await cFlushSave();
+  cur = null; qcur = null; ccur = null;
   const parts = (location.hash || '#/').split('/');
   const page = parts[1] || '', id = decodeURIComponent(parts[2] || '');
-  const top = page === '' || page === 'q';
+  const top = page === '' || page === 'q' || page === 'c';
   window.scrollTo(0, 0);
   $('#backBtn').hidden = top;
   $('#brand').hidden = !top;
@@ -175,6 +195,10 @@ async function route() {
     if (page === 'qnew') return newQuote();
     if (page === 'qedit') return renderQEdit(id);
     if (page === 'qview') return renderQView(id);
+    if (page === 'c') return renderCList();
+    if (page === 'cnew') return newClaim();
+    if (page === 'cedit') return renderCEdit(id);
+    if (page === 'cview') return renderCView(id);
     return renderList();
   } finally { updatePill(); }
 }
@@ -835,6 +859,7 @@ async function renderSettings() {
   const all = await DB.all();
   const allQ = await DB.qall();
   const stampHTML = await stampSettingsHTML();
+  const claimHTML = await claimSettingsHTML();
   $('#app').innerHTML = `
     <div class="sec">
       <h2>ENGINEER</h2>
@@ -846,6 +871,7 @@ async function renderSettings() {
       <label class="f"><span>Token</span><input id="sTok" value="${esc(S.token)}" type="password" autocapitalize="off" autocomplete="off"></label>
       <div class="hint">URL dan token yang sama digunakan oleh semua engineer, supaya nombor report dikongsi.</div>
     </div>
+    ${claimHTML}
     ${stampHTML}
     <div class="acts">
       <button class="btn p" id="sSave" style="grid-column:1/-1">Simpan tetapan</button>
@@ -870,11 +896,12 @@ async function renderSettings() {
     S = old;
   };
   $('#sFull').onclick = async () => {
-    await DB.setMeta('lastPull', ''); await DB.setMeta('lastQPull', ''); const res = await sync();
+    await DB.setMeta('lastPull', ''); await DB.setMeta('lastQPull', ''); await DB.setMeta('lastCPull:' + cnorm(S.engineer), ''); const res = await sync();
     if (res && !res.err) toast('Rekod dikemas kini (' + res.pulled + ' dari server)');
   };
   $('#sCsv').onclick = exportCSV;
   bindStampSettings();
+  bindClaimSettings();
   if ($('#sInstall')) $('#sInstall').onclick = async () => { installEvt.prompt(); await installEvt.userChoice; installEvt = null; renderSettings(); };
 }
 
@@ -908,7 +935,7 @@ async function start() {
   window.addEventListener('hashchange', route);
   window.addEventListener('online', () => sync({ quiet: true }));
   window.addEventListener('offline', () => updatePill());
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sync({ quiet: true }); else { flushSave(); qFlushSave(); } });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sync({ quiet: true }); else { flushSave(); qFlushSave(); cFlushSave(); } });
   await route();
   sync({ quiet: true });
   setInterval(() => sync({ quiet: true }), 5 * 60 * 1000);

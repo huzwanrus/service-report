@@ -3,6 +3,7 @@
  * ------------------------------------------
  * Menyimpan semua service report dan quotation, dan mengeluarkan nombor berkongsi
  * untuk semua engineer: report JNA001 ... JNZ999, quotation QO2026/11/001 (ikut bulan).
+ * Claim (Expense Claim Form) disimpan dalam tab Claims; gambar resit dalam folder Google Drive.
  *
  * Cara pasang (ringkas):
  *  1. Buka Google Sheet baharu > Extensions > Apps Script.
@@ -34,6 +35,14 @@ const QCOLUMNS = [
   'stamp', 'reportId', 'reportNo', 'createdBy', 'createdAt', 'updatedAt', 'serverUpdatedAt'
 ];
 
+/* Claim: borang Expense Claim, resit disimpan dalam folder Google Drive */
+const SHEET_CLAIMS = 'Claims';
+const RECEIPT_FOLDER = 'JN Service Report - Resit Claim';
+const CCOLUMNS = [
+  'id', 'owner', 'name', 'dept', 'claimDate', 'period', 'items', 'total', 'mileageRate',
+  'createdBy', 'createdAt', 'updatedAt', 'serverUpdatedAt'
+];
+
 /* ---------- Setup ---------- */
 function setup() {
   const ss = SpreadsheetApp.getActive();
@@ -51,6 +60,8 @@ function setup() {
     cfg.getRange('A1:A2').setFontWeight('bold');
   }
   quoteSheet_();
+  claimSheet_();
+  receiptFolder_();
   const def = ss.getSheetByName('Sheet1');
   if (def && ss.getSheets().length > 2 && def.getLastRow() === 0) ss.deleteSheet(def);
 }
@@ -99,6 +110,10 @@ function doPost(e) {
     if (req.action === 'list') return json_(list_(req.since));
     if (req.action === 'qsubmit') return json_(qsubmit_(req.quote));
     if (req.action === 'qlist') return json_(qlist_(req.since));
+    if (req.action === 'csubmit') return json_(csubmit_(req.claim));
+    if (req.action === 'clist') return json_(clist_(req.since, req.owner));
+    if (req.action === 'upload') return json_(upload_(req.file));
+    if (req.action === 'getfile') return json_(getfile_(req.driveId));
     return json_({ ok: false, error: 'Action tidak dikenali' });
   } catch (err) {
     return json_({ ok: false, error: String(err && err.message || err) });
@@ -244,4 +259,103 @@ function qlist_(since) {
     out.push(o);
   });
   return { ok: true, quotes: out };
+}
+
+
+/* ---------- Claim ---------- */
+function claimSheet_() {
+  const ss = SpreadsheetApp.getActive();
+  let sh = ss.getSheetByName(SHEET_CLAIMS);
+  if (!sh) {
+    sh = ss.insertSheet(SHEET_CLAIMS);
+    sh.getRange(1, 1, 1, CCOLUMNS.length).setValues([CCOLUMNS]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+function normOwner_(s) { return String(s || '').trim().toLowerCase(); }
+
+function csubmit_(c) {
+  if (!c || !c.id) return { ok: false, error: 'Claim tiada id' };
+  if (!normOwner_(c.owner)) return { ok: false, error: 'Claim tiada nama pemilik (isi Nama engineer dalam Tetapan)' };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sh = claimSheet_();
+    const last = sh.getLastRow();
+    let rowIdx = -1, existing = null;
+    if (last > 1) {
+      const ids = sh.getRange(2, 1, last - 1, 1).getValues();
+      for (let i = 0; i < ids.length; i++) if (ids[i][0] === c.id) { rowIdx = i + 2; break; }
+      if (rowIdx > 0) existing = sh.getRange(rowIdx, 1, 1, CCOLUMNS.length).getValues()[0];
+    }
+    // claim hanya boleh dikemas kini oleh pemilik asal
+    if (existing && normOwner_(existing[1]) !== normOwner_(c.owner)) return { ok: false, error: 'Claim ini milik engineer lain' };
+    const now = new Date().toISOString();
+    const row = CCOLUMNS.map(function (k) {
+      if (k === 'serverUpdatedAt') return now;
+      if (k === 'createdAt' && existing) return existing[CCOLUMNS.indexOf('createdAt')];
+      const v = c[k];
+      if (v === undefined || v === null) return '';
+      if (typeof v === 'object') return JSON.stringify(v);
+      return String(v).slice(0, 49000);
+    });
+    const target = sh.getRange(rowIdx > 0 ? rowIdx : last + 1, 1, 1, CCOLUMNS.length);
+    target.setNumberFormat('@');
+    target.setValues([row]);
+    return { ok: true, serverUpdatedAt: now };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Hanya claim milik `owner` dipulangkan. */
+function clist_(since, owner) {
+  const me = normOwner_(owner);
+  if (!me) return { ok: true, claims: [] };
+  const sh = claimSheet_();
+  const last = sh.getLastRow();
+  if (last < 2) return { ok: true, claims: [] };
+  const vals = sh.getRange(2, 1, last - 1, CCOLUMNS.length).getDisplayValues();
+  const out = [];
+  vals.forEach(function (row) {
+    const o = {};
+    CCOLUMNS.forEach(function (k, i) { o[k] = row[i]; });
+    if (!o.id || normOwner_(o.owner) !== me) return;
+    if (since && o.serverUpdatedAt && o.serverUpdatedAt <= since) return;
+    try { o.items = o.items ? JSON.parse(o.items) : []; } catch (e) { o.items = []; }
+    out.push(o);
+  });
+  return { ok: true, claims: out };
+}
+
+function receiptFolder_() {
+  const it = DriveApp.getFoldersByName(RECEIPT_FOLDER);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(RECEIPT_FOLDER);
+}
+
+/** Simpan gambar resit (base64) dalam folder Drive. */
+function upload_(f) {
+  if (!f || !f.data || !f.name) return { ok: false, error: 'Fail tiada data' };
+  const mime = /^image\/(jpeg|png|webp)$/.test(f.mime || '') ? f.mime : 'image/jpeg';
+  const folder = receiptFolder_();
+  const name = String(f.name).replace(/[^\w.\-]+/g, '_').slice(0, 120);
+  const ex = folder.getFilesByName(name);
+  if (ex.hasNext()) return { ok: true, driveId: ex.next().getId() };   // sudah dimuat naik sebelum ini
+  const blob = Utilities.newBlob(Utilities.base64Decode(f.data), mime, name);
+  return { ok: true, driveId: folder.createFile(blob).getId() };
+}
+
+/** Ambil semula gambar resit. Hanya fail dalam folder resit dibenarkan. */
+function getfile_(driveId) {
+  let file;
+  try { file = DriveApp.getFileById(String(driveId || '')); } catch (e) { return { ok: false, error: 'Fail tidak dijumpai' }; }
+  const folderId = receiptFolder_().getId();
+  let inFolder = false;
+  const parents = file.getParents();
+  while (parents.hasNext()) if (parents.next().getId() === folderId) { inFolder = true; break; }
+  if (!inFolder) return { ok: false, error: 'Akses ditolak' };
+  const blob = file.getBlob();
+  return { ok: true, mime: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
 }

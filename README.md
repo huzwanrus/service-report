@@ -101,3 +101,18 @@ Tab **Quotation** di skrin utama menghasilkan quotation dengan format asal Biz M
 - **Cop:** Gambar dan saiz cop boleh ditukar dalam **Tetapan > Cop Quotation**. Tetapan ini untuk phone itu sahaja.
 
 **Kemas kini server (sekali sahaja):** Gantikan kod dalam Apps Script dengan `apps-script/Code.gs` terbaru, tetapi kekalkan TOKEN anda. Kemudian pergi ke **Deploy > Manage deployments > Edit (ikon pensel) > Version: New version > Deploy**. URL web app kekal sama. Selagi langkah ini belum dibuat, quotation boleh diisi dan disimpan dalam phone tetapi belum mendapat nombor.
+
+---
+
+## Claim (versi 1.3.0)
+
+Tab **Claim** menghasilkan borang **Expense Claim Reimbursement Form** dengan susun atur yang sama seperti template Excel asal.
+
+- **Expense code:** Pilih daripada senarai: Tool, Meal, Mileage, Petrol, Toll, Parking, Car Maintenance, Hotel, Transport dan Other.
+- **Mileage:** Isi Destination, Total mileage (km) dan Activity description. Amaun dikira automatik: km × kadar, contohnya 45 km × RM0.80 = RM36.00. Butang **Isi daripada service report** mengisi destination dan activity daripada report anda.
+- **Kadar mileage:** Lalai RM0.80/km. Boleh diubah dalam **Tetapan > Claim**. Claim lama mengekalkan kadar asalnya.
+- **Gambar resit:** Diambil dengan kamera atau dari galeri. Gambar disimpan dalam folder Google Drive **JN Service Report - Resit Claim** dan dilampirkan dalam PDF ikut Resit No.
+- **Output:** **PDF** (borang dan muka surat resit) dan **Excel** (template asal diisi, dengan formula jumlah). Lajur Dept dilebarkan sedikit supaya "SERVICE" muat.
+- **Akses:** Setiap engineer hanya nampak claim atas nama sendiri, ikut **Nama engineer** dalam Tetapan. Semua claim tersimpan dalam tab **Claims** dalam Google Sheet.
+
+**Kemas kini server (sekali sahaja):** Gantikan kod Apps Script dengan `apps-script/Code.gs` terbaru dan kekalkan TOKEN anda. Pilih fungsi **setup** dan tekan **Run**. Google akan meminta kebenaran baharu untuk Google Drive; benarkan, kerana ia diperlukan untuk menyimpan gambar resit. Kemudian pergi ke **Deploy > Manage deployments > Edit > Version: New version > Deploy**.

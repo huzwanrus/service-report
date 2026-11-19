@@ -32,6 +32,7 @@ function tabsHTML(active) {
   return `<div class="tabs">
     <a href="#/" class="${active === 'r' ? 'on' : ''}">Service Report</a>
     <a href="#/q" class="${active === 'q' ? 'on' : ''}">Quotation</a>
+    <a href="#/c" class="${active === 'c' ? 'on' : ''}">Claim</a>
   </div>`;
 }
 
