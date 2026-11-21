@@ -4,7 +4,7 @@
  * Nombor report (JNA001, JNA002 ... JNB001) dikeluarkan oleh server supaya
  * tidak bertindih antara engineer.
  */
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.1';
 const WORK_TYPES = ['Installation', 'PPM', 'Repair Service', 'Corrective'];
 const COMPANY = {
   name: 'Biz Medic Sdn Bhd',
@@ -84,9 +84,9 @@ let cur = null;                                  // report yang sedang diedit
 let saveT = null;
 
 /* ---------------- Server API ---------------- */
-async function api(action, payload = {}) {
+async function api(action, payload = {}, opts = {}) {
   if (!S.url) throw new Error('URL server belum ditetapkan');
-  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 45000);
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), opts.timeout || 45000);
   try {
     const res = await fetch(S.url, { method: 'POST', body: JSON.stringify({ action, token: S.token, ...payload }), signal: ctl.signal, redirect: 'follow' });
     let j; try { j = await res.json(); } catch (e) { throw new Error('Jawapan server tidak sah (semak URL web app)'); }

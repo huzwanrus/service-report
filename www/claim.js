@@ -310,6 +310,16 @@ function scanBadge(it, i) {
   return '';
 }
 
+/** Kecilkan gambar (dataURL) untuk dihantar ke server scan. */
+async function shrinkDataURL(data, maxSide, q) {
+  const img = new Image(); img.src = data; await img.decode();
+  const k = Math.min(1, maxSide / Math.max(img.width, img.height));
+  if (k === 1 && data.length < 250000) return data;
+  const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+  const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', q);
+}
+
 /** Tambah satu perbelanjaan bagi setiap gambar resit, kemudian baca setiap resit. */
 async function scanFiles(files) {
   const added = [];
@@ -348,7 +358,8 @@ async function scanItem(it) {
   const live = () => ccur && ccur.items.includes(it) && $('#citems');
   it.scan = 'reading'; if (live()) renderCItems();
   try {
-    const j = await api('scanReceipt', { image: data.split(',')[1], mime: 'image/jpeg' });
+    const small = await shrinkDataURL(data, 1024, 0.7);           // gambar kecil untuk dibaca: lebih pantas
+    const j = await api('scanReceipt', { image: small.split(',')[1], mime: 'image/jpeg' }, { timeout: 100000 });
     const r = j.receipt || {};
     const total = Math.round(qnum(r.total) * 100) / 100, tax = Math.round(qnum(r.tax) * 100) / 100;
     if (!it.code && r.category) it.code = r.category;
@@ -363,7 +374,9 @@ async function scanItem(it) {
     cQueueSave();
     return true;
   } catch (e) {
-    it.scan = 'fail'; it.scanErr = e.message; cQueueSave();
+    it.scan = 'fail';
+    it.scanErr = /timeout/.test(e.message) ? 'server terlalu lambat menjawab. Tekan Cuba lagi; jika berulang, semak Executions dalam Apps Script.' : e.message;
+    cQueueSave();
     return false;
   }
 }

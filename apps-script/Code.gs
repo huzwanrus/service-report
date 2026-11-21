@@ -392,6 +392,7 @@ function scanReceipt_(image, mime) {
     contents: [{ parts: [{ inline_data: { mime_type: mime || 'image/jpeg', data: image } }, { text: prompt }] }],
     generationConfig: {
       temperature: 0,
+      thinkingConfig: { thinkingLevel: 'low' },   // tugas mudah: kurangkan masa 'berfikir' supaya lebih pantas
       responseMimeType: 'application/json',
       responseSchema: {
         type: 'OBJECT',
@@ -410,11 +411,21 @@ function scanReceipt_(image, mime) {
   let lastErr = '';
   for (let i = 0; i < models.length; i++) {
     const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + models[i] + ':generateContent';
-    const res = UrlFetchApp.fetch(url, {
+    const t0 = Date.now();
+    let res = UrlFetchApp.fetch(url, {
       method: 'post', contentType: 'application/json', payload: JSON.stringify(body),
       headers: { 'x-goog-api-key': key }, muteHttpExceptions: true
     });
+    // model yang tidak menyokong thinkingLevel: cuba semula tanpanya
+    if (res.getResponseCode() === 400 && /thinking/i.test(res.getContentText())) {
+      const b2 = JSON.parse(JSON.stringify(body)); delete b2.generationConfig.thinkingConfig;
+      res = UrlFetchApp.fetch(url, {
+        method: 'post', contentType: 'application/json', payload: JSON.stringify(b2),
+        headers: { 'x-goog-api-key': key }, muteHttpExceptions: true
+      });
+    }
     const code = res.getResponseCode();
+    console.log('scanReceipt ' + models[i] + ' HTTP ' + code + ' dalam ' + (Date.now() - t0) + ' ms');
     if (code === 404) { lastErr = 'Model ' + models[i] + ' tiada'; continue; }      // cuba model seterusnya
     if (code !== 200) {
       let msg = ''; try { msg = JSON.parse(res.getContentText()).error.message; } catch (e) { msg = res.getContentText().slice(0, 200); }
