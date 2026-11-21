@@ -152,6 +152,21 @@ main{max-width:760px;margin:0 auto;padding:14px 14px calc(110px + var(--safe-b))
 .rthumb{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .rthumb img{width:84px;height:84px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
 @media (max-width:380px){.tabs a{font-size:13px;padding:9px 3px}}
+/* scan resit */
+.scanbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;background:var(--blue-soft);border-radius:12px;padding:11px 12px;margin-bottom:12px}
+.scant{display:flex;flex-direction:column;gap:2px;min-width:180px;flex:1}
+.scant span{font-size:12.5px;color:var(--mut)}
+.sbtn.pri{background:var(--blue);border-color:var(--blue);color:#fff}
+.sbtn.pri svg{color:#fff}
+.scanb{font-size:13px;border-radius:9px;padding:7px 10px;margin:0 0 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.scanb.rd{background:var(--soft);color:var(--mut)}
+.scanb.ok{background:var(--green-soft);color:var(--green)}
+.scanb.ck{background:var(--amber-soft);color:var(--amber)}
+.scanb.er{background:#fee2e2;color:var(--red)}
+.citem.aichk{border-color:#f59e0b;background:#fffbeb}
+.lnk{border:0;background:none;color:inherit;text-decoration:underline;font-weight:700;cursor:pointer;padding:0;font-size:13px}
+.spin{width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;display:inline-block;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
 @media (max-width:420px){.grid2{grid-template-columns:1fr}.kv{grid-template-columns:96px 1fr}}
 </style>
 </head>

@@ -116,3 +116,28 @@ Tab **Claim** menghasilkan borang **Expense Claim Reimbursement Form** dengan su
 - **Akses:** Setiap engineer hanya nampak claim atas nama sendiri, ikut **Nama engineer** dalam Tetapan. Semua claim tersimpan dalam tab **Claims** dalam Google Sheet.
 
 **Kemas kini server (sekali sahaja):** Gantikan kod Apps Script dengan `apps-script/Code.gs` terbaru dan kekalkan TOKEN anda. Pilih fungsi **setup** dan tekan **Run**. Google akan meminta kebenaran baharu untuk Google Drive; benarkan, kerana ia diperlukan untuk menyimpan gambar resit. Kemudian pergi ke **Deploy > Manage deployments > Edit > Version: New version > Deploy**.
+
+---
+
+## Scan resit (versi 1.4.0)
+
+Dalam borang claim, bahagian **Scan resit** membaca gambar resit menggunakan Google Gemini dan menambah perbelanjaan secara automatik.
+
+- **Cara guna:** Tekan **Kamera** untuk satu resit, atau **Galeri** untuk memilih banyak resit sekaligus.
+- **Apa yang diisi:** Setiap resit menjadi satu baris perbelanjaan. Expense code, tarikh, keterangan (nama kedai, barang dan no. resit), amaun dan tax diisi automatik. Gambar resit dilampirkan pada baris itu.
+- **Semakan:**
+  - Hijau ✓ bermaksud resit dibaca dengan baik, tetapi tetap perlu disemak.
+  - Kuning ⚠ bermaksud resit kurang jelas; semak tarikh dan amaun.
+  - Resit yang sama dengan baris lain ditandakan sebagai "mungkin pendua".
+- **Medan sedia ada:** Medan yang sudah diisi tidak ditimpa.
+- **Offline:** Resit disimpan dahulu. Tekan **Baca sekarang** bila ada internet.
+
+### Tetapan server (sekali sahaja)
+1. Dapatkan API key percuma di [Google AI Studio](https://aistudio.google.com/apikey).
+2. Dalam Apps Script, buka **Project Settings** (ikon gear) > **Script Properties** > **Add script property**:
+   - Property: `GEMINI_API_KEY`
+   - Value: API key anda
+
+   **Jangan** tampal key ini dalam Code.gs atau dalam repo, kerana repo ini public.
+3. Pilihan: tambah `GEMINI_MODEL` untuk menukar model. Lalai: `gemini-3.8-flash`. Jika model itu tiada, sistem beralih ke `gemini-flash-latest`, kemudian `gemini-3.6-flash`.
+4. Gantikan kod Apps Script dengan `apps-script/Code.gs` terbaru dan kekalkan TOKEN anda. Pilih **setup** dan tekan **Run**. Benarkan kebenaran baharu, iaitu "Connect to an external service", yang diperlukan untuk menghubungi Gemini. Kemudian pergi ke **Deploy > Manage deployments > Edit > New version > Deploy**.

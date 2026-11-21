@@ -114,6 +114,7 @@ function doPost(e) {
     if (req.action === 'clist') return json_(clist_(req.since, req.owner));
     if (req.action === 'upload') return json_(upload_(req.file));
     if (req.action === 'getfile') return json_(getfile_(req.driveId));
+    if (req.action === 'scanReceipt') return json_(scanReceipt_(req.image, req.mime));
     return json_({ ok: false, error: 'Action tidak dikenali' });
   } catch (err) {
     return json_({ ok: false, error: String(err && err.message || err) });
@@ -358,4 +359,76 @@ function getfile_(driveId) {
   if (!inFolder) return { ok: false, error: 'Akses ditolak' };
   const blob = file.getBlob();
   return { ok: true, mime: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
+}
+
+
+/* ---------- Scan resit (Google Gemini) ----------
+ * API key TIDAK disimpan dalam kod. Simpan dalam:
+ *   Project Settings (ikon gear) > Script Properties > GEMINI_API_KEY
+ * Pilihan: GEMINI_MODEL untuk tukar model (lalai gemini-3.8-flash).
+ */
+const SCAN_CODES = ['Tool', 'Meal', 'Mileage', 'Petrol', 'Toll', 'Parking', 'Car Maintenance', 'Hotel', 'Transport', 'Other'];
+
+function scanReceipt_(image, mime) {
+  const key = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  if (!key) return { ok: false, error: 'GEMINI_API_KEY belum ditetapkan dalam Script Properties' };
+  if (!image) return { ok: false, error: 'Tiada gambar resit' };
+  const prompt = [
+    'You read a single purchase receipt photographed in Malaysia (currency RM/MYR) and extract fields for an employee expense claim.',
+    'Rules:',
+    '- date: the transaction date as YYYY-MM-DD. Malaysian receipts use day/month/year order. Empty string if not visible.',
+    '- total: the final amount paid including tax, as a number. Use the grand total / amount paid, not subtotal or cash tendered.',
+    '- tax: SST, service tax or GST amount included in the total, as a number. 0 if none shown.',
+    '- merchant: shop or company name as printed, short.',
+    '- receiptNo: receipt / invoice / bill number if printed, else empty string.',
+    '- category: one of ' + SCAN_CODES.join(', ') + '. Petrol stations (Petronas, Shell, Petron, Caltex, BHPetrol) = Petrol; PLUS / highway toll / Touch n Go toll = Toll;',
+    '  car park = Parking; restaurant, cafe, food = Meal; hotel, inn, lodging = Hotel; Grab, taxi, bus, train, LRT, flight = Transport;',
+    '  hardware, tools, spare parts for work = Tool; workshop, tyre, service, car wash = Car Maintenance; anything else = Other. Never use Mileage.',
+    '- description: short description of what was bought, e.g. "RON95 30.5L" or "Lunch 2 pax". Max 60 characters.',
+    '- confidence: high, medium or low depending on how readable the total and date are.',
+    'If the image is not a receipt, set confidence to low and total to 0.'
+  ].join('\n');
+  const body = {
+    contents: [{ parts: [{ inline_data: { mime_type: mime || 'image/jpeg', data: image } }, { text: prompt }] }],
+    generationConfig: {
+      temperature: 0,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'OBJECT',
+        properties: {
+          merchant: { type: 'STRING' }, date: { type: 'STRING' }, total: { type: 'NUMBER' }, tax: { type: 'NUMBER' },
+          receiptNo: { type: 'STRING' }, category: { type: 'STRING', enum: SCAN_CODES }, description: { type: 'STRING' },
+          confidence: { type: 'STRING', enum: ['high', 'medium', 'low'] }
+        },
+        required: ['merchant', 'date', 'total', 'tax', 'category', 'description', 'confidence']
+      }
+    }
+  };
+  const prop = PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL');
+  const models = [prop || 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.6-flash']
+    .filter(function (m, i, a) { return m && a.indexOf(m) === i; });
+  let lastErr = '';
+  for (let i = 0; i < models.length; i++) {
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + models[i] + ':generateContent';
+    const res = UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json', payload: JSON.stringify(body),
+      headers: { 'x-goog-api-key': key }, muteHttpExceptions: true
+    });
+    const code = res.getResponseCode();
+    if (code === 404) { lastErr = 'Model ' + models[i] + ' tiada'; continue; }      // cuba model seterusnya
+    if (code !== 200) {
+      let msg = ''; try { msg = JSON.parse(res.getContentText()).error.message; } catch (e) { msg = res.getContentText().slice(0, 200); }
+      return { ok: false, error: 'Gemini (' + code + '): ' + msg };
+    }
+    try {
+      const j = JSON.parse(res.getContentText());
+      const text = j.candidates[0].content.parts.map(function (p) { return p.text || ''; }).join('');
+      const r = JSON.parse(text);
+      if (SCAN_CODES.indexOf(r.category) < 0 || r.category === 'Mileage') r.category = 'Other';
+      return { ok: true, model: models[i], receipt: r };
+    } catch (e) {
+      return { ok: false, error: 'Jawapan Gemini tidak dapat dibaca' };
+    }
+  }
+  return { ok: false, error: lastErr || 'Tiada model Gemini tersedia' };
 }

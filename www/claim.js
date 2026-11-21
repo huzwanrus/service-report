@@ -179,6 +179,7 @@ async function renderCEdit(id) {
   if (!c || !cMine(c)) { location.replace('#/c'); return; }
   ccur = c;
   if (!Array.isArray(ccur.items) || !ccur.items.length) ccur.items = [blankItem(ccur, { resit: '1', rate: ccur.mileageRate })];
+  ccur.items.forEach(it => { if (it.scan === 'reading') it.scan = 'offline'; });   // bacaan terputus sebelum ini
   setTitle(c.status === 'draft' ? 'Claim Baharu' : 'Edit Claim');
   const isDraft = c.status === 'draft';
   const f = (k, label, o = {}) => `<label class="f"><span>${label}</span><input data-ck="${k}" type="${o.type || 'text'}" value="${esc(ccur[k] || '')}" placeholder="${esc(o.ph || '')}" autocomplete="off" ${o.up ? 'autocapitalize="characters"' : ''}></label>`;
@@ -191,6 +192,13 @@ async function renderCEdit(id) {
     </div>
     <div class="sec">
       <h2>PERBELANJAAN</h2>
+      <div class="scanbar">
+        <div class="scant"><b>Scan resit</b><span>Perbelanjaan ditambah automatik daripada gambar resit. Boleh pilih banyak gambar sekaligus.</span></div>
+        <div class="sigbtns" style="margin:0">
+          <label class="sbtn pri">${ICON.cam || ''}Kamera<input type="file" accept="image/*" capture="environment" id="scanCam" hidden></label>
+          <label class="sbtn">${ICON.img || ''}Galeri<input type="file" accept="image/*" multiple id="scanGal" hidden></label>
+        </div>
+      </div>
       <div id="citems"></div>
       <button class="add" id="cAdd" type="button">+ Tambah perbelanjaan</button>
       <div class="qsum">Total Amount: <b id="cGrand">RM ${money(cTotal(ccur))}</b></div>
@@ -215,6 +223,7 @@ async function renderCEdit(id) {
   };
   if ($('#cDraftBtn')) $('#cDraftBtn').onclick = async () => { await cFlushSave(); toast('Draf disimpan dalam phone'); location.hash = '#/cview/' + encodeURIComponent(ccur.id); };
   $('#cSendBtn').onclick = submitClaim;
+  ['#scanCam', '#scanGal'].forEach(s => { $(s).onchange = e => { const fs = [...(e.target.files || [])]; e.target.value = ''; if (fs.length) scanFiles(fs); }; });
   if ($('#cDel')) $('#cDel').onclick = async () => {
     if (!confirm('Padam draf claim ini?')) return;
     clearTimeout(csaveT); csaveT = null;
@@ -228,8 +237,9 @@ function renderCItems() {
   box.innerHTML = ccur.items.map((it, i) => {
     const mil = it.code === 'Mileage';
     const v = k => esc(it[k] ?? '');
-    return `<div class="citem qitem" data-ci="${i}">
+    return `<div class="citem qitem ${it.scan === 'check' ? 'aichk' : ''}" data-ci="${i}">
       <div class="hd"><span>Perbelanjaan ${i + 1}</span><button type="button" class="qdel" data-crm="${i}">Buang</button></div>
+      ${scanBadge(it, i)}
       <div class="grid2">
         <label class="f"><span>Expense code</span><select data-cf="code">
           <option value="">- Pilih -</option>${C_CODES.map(o => `<option ${it.code === o ? 'selected' : ''}>${o}</option>`).join('')}
@@ -265,6 +275,7 @@ function renderCItems() {
   $$('[data-cf]', box).forEach(el => el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
     const i = +el.closest('[data-ci]').dataset.ci, it = ccur.items[i], k = el.dataset.cf;
     it[k] = el.value;
+    if (it.scan === 'ok' || it.scan === 'check') { it.scan = 'edited'; const card = el.closest('[data-ci]'); card.classList.remove('aichk'); const bd = $('.scanb', card); if (bd) bd.remove(); }
     if (k === 'code') {
       if (it.code === 'Mileage' && !qnum(it.rate)) it.rate = ccur.mileageRate || 0.8;
       cQueueSave(); renderCItems(); return;
@@ -284,7 +295,79 @@ function renderCItems() {
     renderCItems(); $('#cGrand').textContent = 'RM ' + money(cTotal(ccur)); cQueueSave();
   });
   $$('[data-cpick]', box).forEach(b => b.onclick = () => pickReport(+b.dataset.cpick));
+  $$('[data-cscan]', box).forEach(b => b.onclick = async () => { await scanItem(ccur.items[+b.dataset.cscan]); renderCItems(); });
 }
+/* ---------------- Scan resit (Gemini melalui server) ---------------- */
+function scanBadge(it, i) {
+  const s = it.scan;
+  if (!s || s === 'edited') return '';
+  const dup = it.scanDup ? ` Mungkin pendua dengan perbelanjaan ${it.scanDup}.` : '';
+  if (s === 'reading') return `<div class="scanb rd"><span class="spin"></span>Membaca resit…</div>`;
+  if (s === 'ok') return `<div class="scanb ok">✓ Diisi daripada resit${it.scanFrom ? ' (' + esc(it.scanFrom) + ')' : ''}. Sila semak.${esc(dup)}</div>`;
+  if (s === 'check') return `<div class="scanb ck">⚠ Diisi oleh AI tetapi resit kurang jelas. Semak tarikh dan amaun.${esc(dup)}</div>`;
+  if (s === 'offline') return `<div class="scanb ck">Resit belum dibaca (tiada internet atau server). <button type="button" class="lnk" data-cscan="${i}">Baca sekarang</button></div>`;
+  if (s === 'fail') return `<div class="scanb er">Resit tidak dapat dibaca: ${esc(it.scanErr || '')} <button type="button" class="lnk" data-cscan="${i}">Cuba lagi</button></div>`;
+  return '';
+}
+
+/** Tambah satu perbelanjaan bagi setiap gambar resit, kemudian baca setiap resit. */
+async function scanFiles(files) {
+  const added = [];
+  for (const file of files) {
+    let data;
+    try { data = await compressImage(file); } catch (e) { toast('Satu gambar tidak dapat dibuka', 3000); continue; }
+    const rid = uuid();
+    await DB.fput({ id: rid, data, mime: 'image/jpeg', claimId: ccur.id });
+    const nextResit = String(Math.max(0, ...ccur.items.map(x => parseInt(x.resit, 10) || 0)) + 1);
+    const it = blankItem(ccur, { resit: nextResit, rate: ccur.mileageRate, date: '', receiptId: rid, scan: 'reading' });
+    // gantikan baris kosong pertama (claim baharu bermula dengan satu baris kosong)
+    const blank = ccur.items.findIndex(x => !x.code && !x.receiptId && !(cInc(x) > 0) && !String(x.desc || x.dest || '').trim());
+    if (blank >= 0) { it.resit = ccur.items[blank].resit || it.resit; ccur.items[blank] = it; } else ccur.items.push(it);
+    added.push(it);
+  }
+  if (!added.length) return;
+  cQueueSave(); renderCItems();
+  const firstCard = $(`[data-ci="${ccur.items.indexOf(added[0])}"]`); if (firstCard) firstCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  let ok = 0;
+  for (let k = 0; k < added.length; k++) {
+    if (added.length > 1) toast(`Membaca resit ${k + 1}/${added.length}…`, 2500);
+    if (await scanItem(added[k])) ok++;
+    if (!ccur || !ccur.items.includes(added[k])) return;   // pengguna telah keluar dari borang
+    renderCItems(); $('#cGrand').textContent = 'RM ' + money(cTotal(ccur));
+  }
+  toast(ok === added.length ? `${ok} resit dibaca. Sila semak setiap perbelanjaan.` : `${ok}/${added.length} resit dibaca. Semak yang bertanda.`, 3500);
+}
+
+/** Baca satu resit dan isi medan yang masih kosong. Pulangkan true jika berjaya. */
+async function scanItem(it) {
+  if (!it || !it.receiptId) return false;
+  const f = await DB.fget(it.receiptId);
+  const data = (f && f.data) || await getReceipt(it);
+  if (!data) { it.scan = 'fail'; it.scanErr = 'gambar tiada'; cQueueSave(); return false; }
+  if (!S.url || !navigator.onLine) { it.scan = 'offline'; cQueueSave(); return false; }
+  const live = () => ccur && ccur.items.includes(it) && $('#citems');
+  it.scan = 'reading'; if (live()) renderCItems();
+  try {
+    const j = await api('scanReceipt', { image: data.split(',')[1], mime: 'image/jpeg' });
+    const r = j.receipt || {};
+    const total = Math.round(qnum(r.total) * 100) / 100, tax = Math.round(qnum(r.tax) * 100) / 100;
+    if (!it.code && r.category) it.code = r.category;
+    if (!it.date && /^\d{4}-\d{2}-\d{2}$/.test(r.date || '')) it.date = r.date;
+    if (!String(it.desc || '').trim()) it.desc = [r.merchant, r.description, r.receiptNo ? 'No. ' + r.receiptNo : ''].map(s => String(s || '').trim()).filter(Boolean).join(' - ');
+    if (!qnum(it.exTax) && total > 0) { it.exTax = (Math.round((total - Math.min(tax, total)) * 100) / 100).toFixed(2); it.tax = tax ? tax.toFixed(2) : ''; }
+    if (!it.date) it.date = today();
+    it.scanFrom = String(r.merchant || '').trim().slice(0, 40);
+    it.scan = r.confidence === 'high' && total > 0 && /^\d{4}-\d{2}-\d{2}$/.test(r.date || '') ? 'ok' : 'check';
+    const n = ccur ? ccur.items.findIndex(x => x !== it && x.code === it.code && x.date === it.date && Math.abs(cInc(x) - cInc(it)) < 0.005 && cInc(it) > 0) : -1;
+    it.scanDup = n >= 0 ? n + 1 : 0;
+    cQueueSave();
+    return true;
+  } catch (e) {
+    it.scan = 'fail'; it.scanErr = e.message; cQueueSave();
+    return false;
+  }
+}
+
 function mileText(it) {
   const km = qnum(it.km);
   return km ? `${km} km × RM${cRate(it).toFixed(2)} = RM${money(cEx(it))}` : 'Isi jumlah km untuk kira amaun mileage';
@@ -295,8 +378,12 @@ async function renderReceiptBox(i) {
   const it = ccur.items[i];
   const data = it.receiptId ? await getReceipt(it) : null;
   if (it.receiptId) {
+    const canScan = data && it.code !== 'Mileage' && !it.scan && !(cInc(it) > 0);
     box.innerHTML = `<div class="rthumb">${data ? `<img src="${data}" alt="Resit">` : '<span class="hint">Gambar resit di server (akan dimuat turun bila online)</span>'}
-      <button type="button" class="qdel" data-rrm="${i}">Buang gambar</button></div>`;
+      <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">
+        ${canScan ? `<button type="button" class="sbtn" data-cscan="${i}">Isi daripada resit</button>` : ''}
+        <button type="button" class="qdel" data-rrm="${i}">Buang gambar</button></div></div>`;
+    const sb = $(`[data-cscan="${i}"]`, box); if (sb) sb.onclick = async () => { await scanItem(it); renderCItems(); };
     $(`[data-rrm="${i}"]`, box).onclick = async () => {
       if (!confirm('Buang gambar resit ini?')) return;
       if (!it.receiptDrive) await DB.fdel(it.receiptId);
@@ -343,6 +430,7 @@ async function pickReport(i) {
 }
 
 async function submitClaim() {
+  if (ccur.items.some(it => it.scan === 'reading')) { toast('Tunggu sehingga semua resit selesai dibaca', 3000); return; }
   const miss = [];
   if (!String(ccur.name || '').trim()) miss.push('Name');
   if (!ccur.claimDate) miss.push('Date');
@@ -356,6 +444,7 @@ async function submitClaim() {
   });
   if (miss.length) { toast('Sila isi: ' + miss.slice(0, 4).join(', ') + (miss.length > 4 ? '…' : ''), 4000); return; }
   ccur.items = items;
+  items.forEach(it => { if (it.scan === 'ok' || it.scan === 'check') it.scan = 'edited'; delete it.scanDup; });
   ccur.status = 'pending'; ccur.updatedAt = new Date().toISOString();
   clearTimeout(csaveT); csaveT = null;
   await DB.cput(ccur);
