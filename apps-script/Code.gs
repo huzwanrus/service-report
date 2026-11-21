@@ -406,31 +406,41 @@ function scanReceipt_(image, mime) {
     }
   };
   const prop = PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL');
-  const models = [prop || 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.6-flash']
+  // Model sesak (503/500/429) atau tiada (404): cuba semula sekali, kemudian beralih ke model seterusnya.
+  const models = [prop || 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-flash-latest']
     .filter(function (m, i, a) { return m && a.indexOf(m) === i; });
-  let lastErr = '';
-  for (let i = 0; i < models.length; i++) {
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + models[i] + ':generateContent';
-    const t0 = Date.now();
-    let res = UrlFetchApp.fetch(url, {
-      method: 'post', contentType: 'application/json', payload: JSON.stringify(body),
+  const BUSY = [429, 500, 503, 504];
+  const start = Date.now();
+  const call = function (url, b) {
+    return UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json', payload: JSON.stringify(b),
       headers: { 'x-goog-api-key': key }, muteHttpExceptions: true
     });
-    // model yang tidak menyokong thinkingLevel: cuba semula tanpanya
-    if (res.getResponseCode() === 400 && /thinking/i.test(res.getContentText())) {
-      const b2 = JSON.parse(JSON.stringify(body)); delete b2.generationConfig.thinkingConfig;
-      res = UrlFetchApp.fetch(url, {
-        method: 'post', contentType: 'application/json', payload: JSON.stringify(b2),
-        headers: { 'x-goog-api-key': key }, muteHttpExceptions: true
-      });
+  };
+  const errMsg = function (res) {
+    try { return JSON.parse(res.getContentText()).error.message; } catch (e) { return res.getContentText().slice(0, 200); }
+  };
+  let lastErr = '';
+  for (let i = 0; i < models.length; i++) {
+    if (Date.now() - start > 70000) break;                // jangan melebihi had masa app (100s)
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + models[i] + ':generateContent';
+    let b = body, res = null, code = 0;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const t0 = Date.now();
+      res = call(url, b);
+      code = res.getResponseCode();
+      // model yang tidak menyokong thinkingLevel: cuba semula tanpanya
+      if (code === 400 && /thinking/i.test(res.getContentText())) {
+        b = JSON.parse(JSON.stringify(body)); delete b.generationConfig.thinkingConfig;
+        res = call(url, b); code = res.getResponseCode();
+      }
+      console.log('scanReceipt ' + models[i] + ' HTTP ' + code + ' dalam ' + (Date.now() - t0) + ' ms');
+      if (BUSY.indexOf(code) < 0 || attempt === 1 || Date.now() - start > 60000) break;
+      Utilities.sleep(1500);                             // sesak sementara: tunggu sebentar dan cuba sekali lagi
     }
-    const code = res.getResponseCode();
-    console.log('scanReceipt ' + models[i] + ' HTTP ' + code + ' dalam ' + (Date.now() - t0) + ' ms');
-    if (code === 404) { lastErr = 'Model ' + models[i] + ' tiada'; continue; }      // cuba model seterusnya
-    if (code !== 200) {
-      let msg = ''; try { msg = JSON.parse(res.getContentText()).error.message; } catch (e) { msg = res.getContentText().slice(0, 200); }
-      return { ok: false, error: 'Gemini (' + code + '): ' + msg };
-    }
+    if (code === 404) { lastErr = 'Model ' + models[i] + ' tiada'; continue; }
+    if (BUSY.indexOf(code) >= 0) { lastErr = 'Gemini sedang sibuk (' + code + '). Cuba lagi sebentar.'; continue; }
+    if (code !== 200) return { ok: false, error: 'Gemini (' + code + '): ' + errMsg(res) };
     try {
       const j = JSON.parse(res.getContentText());
       const text = j.candidates[0].content.parts.map(function (p) { return p.text || ''; }).join('');
