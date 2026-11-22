@@ -1,5 +1,5 @@
 /* Service worker: simpan fail app supaya boleh dibuka tanpa internet. */
-const CACHE = 'jn-sr-v1.4.1';
+const CACHE = 'jn-sr-v1.4.2';
 const FILES = ['./', 'index.html', 'app.js', 'quote.js', 'claim.js', 'exceljs.min.js', 'claim_template.xlsx', 'letterhead.jpg', 'stamp.png', 'jspdf.umd.min.js', 'logo.jpg', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png'];
 

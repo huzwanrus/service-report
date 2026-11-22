@@ -115,6 +115,7 @@ function doPost(e) {
     if (req.action === 'upload') return json_(upload_(req.file));
     if (req.action === 'getfile') return json_(getfile_(req.driveId));
     if (req.action === 'scanReceipt') return json_(scanReceipt_(req.image, req.mime));
+    if (req.action === 'geminiTest') return json_(geminiTest_());
     return json_({ ok: false, error: 'Action tidak dikenali' });
   } catch (err) {
     return json_({ ok: false, error: String(err && err.message || err) });
@@ -365,12 +366,62 @@ function getfile_(driveId) {
 /* ---------- Scan resit (Google Gemini) ----------
  * API key TIDAK disimpan dalam kod. Simpan dalam:
  *   Project Settings (ikon gear) > Script Properties > GEMINI_API_KEY
- * Pilihan: GEMINI_MODEL untuk tukar model (lalai gemini-3.8-flash).
+ * Pilihan: GEMINI_MODEL untuk tukar model utama (lalai gemini-3.5-flash-lite).
+ * Dua model dipanggil SERENTAK (UrlFetchApp.fetchAll), jadi masa menunggu hanya satu pusingan.
  */
 const SCAN_CODES = ['Tool', 'Meal', 'Mileage', 'Petrol', 'Toll', 'Parking', 'Car Maintenance', 'Hotel', 'Transport', 'Other'];
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/';
+const GEMINI_BUSY = [429, 500, 503, 504];
+
+function geminiKey_() {
+  return String(PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') || '').trim();
+}
+function geminiModels_() {
+  const prop = String(PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL') || '').trim();
+  return [prop || 'gemini-3.5-flash-lite', 'gemini-3.6-flash'].filter(function (m, i, a) { return m && a.indexOf(m) === i; });
+}
+/** Tahap 'berfikir' paling rendah yang disokong setiap model (Flash-Lite: tidak dihantar). */
+function thinkingFor_(model) {
+  if (/lite/.test(model)) return null;
+  if (/3\.8/.test(model)) return 'low';
+  return 'minimal';
+}
+function geminiErr_(res) {
+  try { return JSON.parse(res.getContentText()).error.message; } catch (e) { return res.getContentText().slice(0, 160); }
+}
+
+/**
+ * Hantar body yang sama kepada beberapa model serentak.
+ * Pulangkan senarai {model, code, ms, res} mengikut susunan model.
+ */
+function geminiFetchAll_(models, makeBody, key) {
+  const reqOf = function (m, withThinking) {
+    const b = makeBody();
+    const lvl = withThinking ? thinkingFor_(m) : null;
+    if (lvl) b.generationConfig.thinkingConfig = { thinkingLevel: lvl };
+    return { url: GEMINI_BASE + m + ':generateContent', method: 'post', contentType: 'application/json',
+      payload: JSON.stringify(b), headers: { 'x-goog-api-key': key }, muteHttpExceptions: true };
+  };
+  const t0 = Date.now();
+  const res = UrlFetchApp.fetchAll(models.map(function (m) { return reqOf(m, true); }));
+  const out = models.map(function (m, i) { return { model: m, code: res[i].getResponseCode(), ms: Date.now() - t0, res: res[i] }; });
+  // model yang menolak thinkingLevel: hantar semula tanpanya (serentak juga)
+  const redo = out.filter(function (o) { return o.code === 400 && /thinking/i.test(o.res.getContentText()); });
+  if (redo.length) {
+    const t1 = Date.now();
+    const r2 = UrlFetchApp.fetchAll(redo.map(function (o) { return reqOf(o.model, false); }));
+    redo.forEach(function (o, i) { o.res = r2[i]; o.code = r2[i].getResponseCode(); o.ms += Date.now() - t1; });
+  }
+  out.forEach(function (o) { console.log('Gemini ' + o.model + ' HTTP ' + o.code + ' dalam ' + o.ms + ' ms'); });
+  return out;
+}
+
+function summarize_(tried) {
+  return tried.map(function (o) { return o.model + ': HTTP ' + o.code + ' (' + (o.ms / 1000).toFixed(1) + 's)'; }).join('; ');
+}
 
 function scanReceipt_(image, mime) {
-  const key = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  const key = geminiKey_();
   if (!key) return { ok: false, error: 'GEMINI_API_KEY belum ditetapkan dalam Script Properties' };
   if (!image) return { ok: false, error: 'Tiada gambar resit' };
   const prompt = [
@@ -388,68 +439,68 @@ function scanReceipt_(image, mime) {
     '- confidence: high, medium or low depending on how readable the total and date are.',
     'If the image is not a receipt, set confidence to low and total to 0.'
   ].join('\n');
-  const body = {
-    contents: [{ parts: [{ inline_data: { mime_type: mime || 'image/jpeg', data: image } }, { text: prompt }] }],
-    generationConfig: {
-      temperature: 0,
-      thinkingConfig: { thinkingLevel: 'low' },   // tugas mudah: kurangkan masa 'berfikir' supaya lebih pantas
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: 'OBJECT',
-        properties: {
-          merchant: { type: 'STRING' }, date: { type: 'STRING' }, total: { type: 'NUMBER' }, tax: { type: 'NUMBER' },
-          receiptNo: { type: 'STRING' }, category: { type: 'STRING', enum: SCAN_CODES }, description: { type: 'STRING' },
-          confidence: { type: 'STRING', enum: ['high', 'medium', 'low'] }
-        },
-        required: ['merchant', 'date', 'total', 'tax', 'category', 'description', 'confidence']
+  const makeBody = function () {
+    return {
+      contents: [{ parts: [{ inline_data: { mime_type: mime || 'image/jpeg', data: image } }, { text: prompt }] }],
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: 'OBJECT',
+          properties: {
+            merchant: { type: 'STRING' }, date: { type: 'STRING' }, total: { type: 'NUMBER' }, tax: { type: 'NUMBER' },
+            receiptNo: { type: 'STRING' }, category: { type: 'STRING', enum: SCAN_CODES }, description: { type: 'STRING' },
+            confidence: { type: 'STRING', enum: ['high', 'medium', 'low'] }
+          },
+          required: ['merchant', 'date', 'total', 'tax', 'category', 'description', 'confidence']
+        }
       }
-    }
+    };
   };
-  const prop = PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL');
-  // Model sesak (503/500/429) atau tiada (404): cuba semula sekali, kemudian beralih ke model seterusnya.
-  const models = [prop || 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-flash-latest']
-    .filter(function (m, i, a) { return m && a.indexOf(m) === i; });
-  const BUSY = [429, 500, 503, 504];
-  const start = Date.now();
-  const call = function (url, b) {
-    return UrlFetchApp.fetch(url, {
-      method: 'post', contentType: 'application/json', payload: JSON.stringify(b),
-      headers: { 'x-goog-api-key': key }, muteHttpExceptions: true
-    });
-  };
-  const errMsg = function (res) {
-    try { return JSON.parse(res.getContentText()).error.message; } catch (e) { return res.getContentText().slice(0, 200); }
-  };
-  let lastErr = '';
-  for (let i = 0; i < models.length; i++) {
-    if (Date.now() - start > 70000) break;                // jangan melebihi had masa app (100s)
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + models[i] + ':generateContent';
-    let b = body, res = null, code = 0;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const t0 = Date.now();
-      res = call(url, b);
-      code = res.getResponseCode();
-      // model yang tidak menyokong thinkingLevel: cuba semula tanpanya
-      if (code === 400 && /thinking/i.test(res.getContentText())) {
-        b = JSON.parse(JSON.stringify(body)); delete b.generationConfig.thinkingConfig;
-        res = call(url, b); code = res.getResponseCode();
-      }
-      console.log('scanReceipt ' + models[i] + ' HTTP ' + code + ' dalam ' + (Date.now() - t0) + ' ms');
-      if (BUSY.indexOf(code) < 0 || attempt === 1 || Date.now() - start > 60000) break;
-      Utilities.sleep(1500);                             // sesak sementara: tunggu sebentar dan cuba sekali lagi
-    }
-    if (code === 404) { lastErr = 'Model ' + models[i] + ' tiada'; continue; }
-    if (BUSY.indexOf(code) >= 0) { lastErr = 'Gemini sedang sibuk (' + code + '). Cuba lagi sebentar.'; continue; }
-    if (code !== 200) return { ok: false, error: 'Gemini (' + code + '): ' + errMsg(res) };
+  const tried = geminiFetchAll_(geminiModels_(), makeBody, key);
+  for (let i = 0; i < tried.length; i++) {                 // ikut keutamaan: model pertama yang berjaya
+    const o = tried[i];
+    if (o.code !== 200) continue;
     try {
-      const j = JSON.parse(res.getContentText());
+      const j = JSON.parse(o.res.getContentText());
       const text = j.candidates[0].content.parts.map(function (p) { return p.text || ''; }).join('');
       const r = JSON.parse(text);
       if (SCAN_CODES.indexOf(r.category) < 0 || r.category === 'Mileage') r.category = 'Other';
-      return { ok: true, model: models[i], receipt: r };
-    } catch (e) {
-      return { ok: false, error: 'Jawapan Gemini tidak dapat dibaca' };
-    }
+      return { ok: true, model: o.model, ms: o.ms, receipt: r };
+    } catch (e) { o.code = 'jawapan rosak'; }
   }
-  return { ok: false, error: lastErr || 'Tiada model Gemini tersedia' };
+  // tiada yang berjaya: mesej yang jelas
+  const codes = tried.map(function (o) { return o.code; });
+  const first = tried[0];
+  if (codes.some(function (c) { return c === 400 || c === 403; }) && /API key|API_KEY|permission/i.test(geminiErr_(first.res)))
+    return { ok: false, error: 'API key Gemini tidak sah: ' + geminiErr_(first.res) };
+  if (codes.every(function (c) { return GEMINI_BUSY.indexOf(c) >= 0; }))
+    return { ok: false, error: 'Gemini sedang sibuk. Cuba lagi sebentar. [' + summarize_(tried) + ']' };
+  const bad = tried.filter(function (o) { return o.code !== 200; })[0];
+  return { ok: false, error: 'Gemini ' + bad.model + ' (' + bad.code + '): ' + (typeof bad.code === 'number' ? geminiErr_(bad.res) : '') + ' [' + summarize_(tried) + ']' };
+}
+
+/** Diagnostik untuk butang "Uji Gemini" dalam Tetapan app. */
+function geminiTest_() {
+  const key = geminiKey_();
+  const info = {
+    keySet: !!key,
+    keyLooksRight: /^AIza[\w-]{30,}$/.test(key),
+    keyPreview: key ? key.slice(0, 6) + '…' + key.slice(-4) + ' (' + key.length + ' aksara)' : '',
+    models: []
+  };
+  if (!key) return { ok: true, info: info };
+  const makeBody = function () {
+    return { contents: [{ parts: [{ text: 'Reply with the single word OK.' }] }], generationConfig: { temperature: 0 } };
+  };
+  const t0 = Date.now();
+  try {
+    geminiFetchAll_(geminiModels_(), makeBody, key).forEach(function (o) {
+      info.models.push({ model: o.model, code: o.code, ms: o.ms, msg: o.code === 200 ? 'OK' : geminiErr_(o.res) });
+    });
+  } catch (e) {
+    info.fetchError = String(e && e.message || e);   // cth. kebenaran "external request" belum diberi
+  }
+  info.totalMs = Date.now() - t0;
+  return { ok: true, info: info };
 }

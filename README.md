@@ -139,5 +139,6 @@ Dalam borang claim, bahagian **Scan resit** membaca gambar resit menggunakan Goo
    - Value: API key anda
 
    **Jangan** tampal key ini dalam Code.gs atau dalam repo, kerana repo ini public.
-3. Pilihan: tambah `GEMINI_MODEL` untuk menukar model. Lalai: `gemini-3.8-flash`. Jika model itu tiada, sistem beralih ke `gemini-flash-latest`, kemudian `gemini-3.6-flash`.
+3. Pilihan: tambah `GEMINI_MODEL` untuk menukar model utama (lalai `gemini-3.5-flash-lite`). `gemini-3.6-flash` sentiasa dipanggil serentak sebagai sandaran, dan jawapan pertama yang berjaya digunakan.
+5. Dalam app, buka **Tetapan > Claim > Uji Gemini** untuk menyemak API key dan setiap model.
 4. Gantikan kod Apps Script dengan `apps-script/Code.gs` terbaru dan kekalkan TOKEN anda. Pilih **setup** dan tekan **Run**. Benarkan kebenaran baharu, iaitu "Connect to an external service", yang diperlukan untuk menghubungi Gemini. Kemudian pergi ke **Deploy > Manage deployments > Edit > New version > Deploy**.

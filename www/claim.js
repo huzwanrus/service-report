@@ -302,8 +302,8 @@ function scanBadge(it, i) {
   const s = it.scan;
   if (!s || s === 'edited') return '';
   const dup = it.scanDup ? ` Mungkin pendua dengan perbelanjaan ${it.scanDup}.` : '';
-  if (s === 'reading') return `<div class="scanb rd"><span class="spin"></span>Membaca resit…</div>`;
-  if (s === 'ok') return `<div class="scanb ok">✓ Diisi daripada resit${it.scanFrom ? ' (' + esc(it.scanFrom) + ')' : ''}. Sila semak.${esc(dup)}</div>`;
+  if (s === 'reading') return `<div class="scanb rd"><span class="spin"></span>Membaca resit… <span data-scant="${it.scanStart || Date.now()}">0s</span></div>`;
+  if (s === 'ok') return `<div class="scanb ok">✓ Diisi daripada resit${it.scanFrom ? ' (' + esc(it.scanFrom) + ')' : ''}${it.scanInfo ? ' dalam ' + esc(it.scanInfo) : ''}. Sila semak.${esc(dup)}</div>`;
   if (s === 'check') return `<div class="scanb ck">⚠ Diisi oleh AI tetapi resit kurang jelas. Semak tarikh dan amaun.${esc(dup)}</div>`;
   if (s === 'offline') return `<div class="scanb ck">Resit belum dibaca (tiada internet atau server). <button type="button" class="lnk" data-cscan="${i}">Baca sekarang</button></div>`;
   if (s === 'fail') return `<div class="scanb er">Resit tidak dapat dibaca: ${esc(it.scanErr || '')} <button type="button" class="lnk" data-cscan="${i}">Cuba lagi</button></div>`;
@@ -356,7 +356,9 @@ async function scanItem(it) {
   if (!data) { it.scan = 'fail'; it.scanErr = 'gambar tiada'; cQueueSave(); return false; }
   if (!S.url || !navigator.onLine) { it.scan = 'offline'; cQueueSave(); return false; }
   const live = () => ccur && ccur.items.includes(it) && $('#citems');
+  it.scanStart = Date.now();
   it.scan = 'reading'; if (live()) renderCItems();
+  const tick = setInterval(() => $$('[data-scant]').forEach(el => { el.textContent = Math.round((Date.now() - +el.dataset.scant) / 1000) + 's'; }), 1000);
   try {
     const small = await shrinkDataURL(data, 1024, 0.7);           // gambar kecil untuk dibaca: lebih pantas
     const j = await api('scanReceipt', { image: small.split(',')[1], mime: 'image/jpeg' }, { timeout: 100000 });
@@ -367,15 +369,19 @@ async function scanItem(it) {
     if (!String(it.desc || '').trim()) it.desc = [r.merchant, r.description, r.receiptNo ? 'No. ' + r.receiptNo : ''].map(s => String(s || '').trim()).filter(Boolean).join(' - ');
     if (!qnum(it.exTax) && total > 0) { it.exTax = (Math.round((total - Math.min(tax, total)) * 100) / 100).toFixed(2); it.tax = tax ? tax.toFixed(2) : ''; }
     if (!it.date) it.date = today();
+    clearInterval(tick);
     it.scanFrom = String(r.merchant || '').trim().slice(0, 40);
+    it.scanInfo = `${((Date.now() - it.scanStart) / 1000).toFixed(0)}s`;
     it.scan = r.confidence === 'high' && total > 0 && /^\d{4}-\d{2}-\d{2}$/.test(r.date || '') ? 'ok' : 'check';
     const n = ccur ? ccur.items.findIndex(x => x !== it && x.code === it.code && x.date === it.date && Math.abs(cInc(x) - cInc(it)) < 0.005 && cInc(it) > 0) : -1;
     it.scanDup = n >= 0 ? n + 1 : 0;
     cQueueSave();
     return true;
   } catch (e) {
+    clearInterval(tick);
     it.scan = 'fail';
-    it.scanErr = /timeout/.test(e.message) ? 'server terlalu lambat menjawab. Tekan Cuba lagi; jika berulang, semak Executions dalam Apps Script.' : e.message;
+    it.scanErr = /timeout/.test(e.message) ? 'server tidak menjawab dalam 100 saat. Tekan "Uji Gemini" dalam Tetapan untuk semak puncanya.'
+      : /Action tidak dikenali/.test(e.message) ? 'server belum dikemas kini. Tampal Code.gs terbaru dan Deploy versi baharu.' : e.message;
     cQueueSave();
     return false;
   }
@@ -680,9 +686,38 @@ async function claimSettingsHTML() {
       <label class="f"><span>Kadar mileage (RM/km)</span><input id="ccRate" inputmode="decimal" value="${esc(c.rate.toFixed(2))}"></label>
     </div>
     <div class="hint">Digunakan untuk claim baharu. Claim sedia ada mengekalkan kadar asalnya.</div>
+    <button type="button" class="btn" id="gemTest" style="width:100%;margin-top:12px">Uji Gemini (scan resit)</button>
+    <div id="gemOut" class="gemout" hidden></div>
   </div>`;
 }
+async function runGeminiTest() {
+  const out = $('#gemOut'), btn = $('#gemTest');
+  out.hidden = false;
+  if (!S.url) { out.innerHTML = '<b>✗</b> URL server belum ditetapkan dan disimpan di atas.'; return; }
+  btn.disabled = true; const t0 = Date.now();
+  out.innerHTML = '<span class="spin"></span> Menguji… <span data-scant="' + t0 + '">0s</span>';
+  const tick = setInterval(() => $$('[data-scant]', out).forEach(el => { el.textContent = Math.round((Date.now() - t0) / 1000) + 's'; }), 1000);
+  const row = (ok, t) => `<div class="${ok ? 'gok' : 'gbad'}">${ok ? '✓' : '✗'} ${t}</div>`;
+  try {
+    const j = await api('geminiTest', {}, { timeout: 100000 });
+    const i = j.info || {}; let html = row(true, `Server dihubungi (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+    if (!i.keySet) html += row(false, 'GEMINI_API_KEY tiada dalam Script Properties. Semak ejaan nama property.');
+    else {
+      html += row(i.keyLooksRight, `API key dijumpai: ${esc(i.keyPreview)}${i.keyLooksRight ? '' : ' — format pelik; key Gemini biasanya bermula "AIza" dan 39 aksara. Semak ruang kosong.'}`);
+      if (i.fetchError) html += row(false, 'Server tidak dapat menghubungi Gemini: ' + esc(i.fetchError) + ' — jalankan fungsi setup sekali lagi dan benarkan "Connect to an external service".');
+      (i.models || []).forEach(m => { html += row(m.code === 200, `${esc(m.model)}: ${m.code === 200 ? 'berfungsi' : 'HTTP ' + esc(m.code) + ' — ' + esc(m.msg)} (${(m.ms / 1000).toFixed(1)}s)`); });
+      if ((i.models || []).some(m => m.code === 200)) html += '<div class="hint" style="margin-top:6px">Gemini sedia. Scan resit sepatutnya berfungsi.</div>';
+    }
+    out.innerHTML = html;
+  } catch (e) {
+    out.innerHTML = row(false, /Action tidak dikenali/.test(e.message)
+      ? 'Server masih versi lama. Tampal Code.gs terbaru, kemudian Deploy > Manage deployments > Edit > New version > Deploy.'
+      : esc(e.message));
+  } finally { clearInterval(tick); btn.disabled = false; }
+}
+
 function bindClaimSettings() {
+  $('#gemTest').onclick = runGeminiTest;
   $('#ccName').onchange = e => setClaimCfg({ fullName: e.target.value.trim() });
   $('#ccDept').onchange = e => setClaimCfg({ dept: e.target.value.trim() || 'SERVICE' });
   $('#ccRate').onchange = e => { const v = qnum(e.target.value); if (v > 0) { setClaimCfg({ rate: v }); toast('Kadar mileage: RM' + v.toFixed(2) + '/km'); } };
