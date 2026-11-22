@@ -310,6 +310,30 @@ function scanBadge(it, i) {
   return '';
 }
 
+/**
+ * Hantar resit kepada setiap model secara serentak (satu permintaan setiap model) dan guna jawapan
+ * pertama yang berjaya. Jika semua gagal kerana sibuk/lambat, cuba semula sekali selepas 4 saat.
+ */
+let SCAN_MODELS = null;
+async function raceScan(image) {
+  if (!SCAN_MODELS) {
+    try { SCAN_MODELS = (await api('scanModels', {}, { timeout: 30000 })).models; }
+    catch (e) { if (/Action tidak dikenali/.test(e.message)) throw e; SCAN_MODELS = null; }
+  }
+  const models = SCAN_MODELS && SCAN_MODELS.length ? SCAN_MODELS : [null];   // null: server pilih sendiri
+  const once = () => Promise.any(models.map(m => api('scanReceipt', { image, mime: 'image/jpeg', ...(m ? { model: m } : {}) }, { timeout: 60000 })));
+  const msgOf = e => (e && e.errors ? e.errors.map(x => x.message) : [e && e.message]).filter(Boolean);
+  try { return await once(); }
+  catch (e) {
+    const msgs = msgOf(e);
+    // ralat kekal (key salah, server lama): jangan cuba semula
+    if (msgs.some(m => /API key|tidak sah|Action tidak dikenali|belum ditetapkan|Token/i.test(m))) throw new Error(msgs[0]);
+    await new Promise(r => setTimeout(r, 4000));
+    try { return await once(); }
+    catch (e2) { const m2 = msgOf(e2); throw new Error(m2.some(m => /timeout|lambat/i.test(m)) ? 'timeout' : (m2[0] || 'Gagal')); }
+  }
+}
+
 /** Kecilkan gambar (dataURL) untuk dihantar ke server scan. */
 async function shrinkDataURL(data, maxSide, q) {
   const img = new Image(); img.src = data; await img.decode();
@@ -361,7 +385,7 @@ async function scanItem(it) {
   const tick = setInterval(() => $$('[data-scant]').forEach(el => { el.textContent = Math.round((Date.now() - +el.dataset.scant) / 1000) + 's'; }), 1000);
   try {
     const small = await shrinkDataURL(data, 1024, 0.7);           // gambar kecil untuk dibaca: lebih pantas
-    const j = await api('scanReceipt', { image: small.split(',')[1], mime: 'image/jpeg' }, { timeout: 100000 });
+    const j = await raceScan(small.split(',')[1]);
     const r = j.receipt || {};
     const total = Math.round(qnum(r.total) * 100) / 100, tax = Math.round(qnum(r.tax) * 100) / 100;
     if (!it.code && r.category) it.code = r.category;
@@ -380,7 +404,7 @@ async function scanItem(it) {
   } catch (e) {
     clearInterval(tick);
     it.scan = 'fail';
-    it.scanErr = /timeout/.test(e.message) ? 'server tidak menjawab dalam 100 saat. Tekan "Uji Gemini" dalam Tetapan untuk semak puncanya.'
+    it.scanErr = /timeout/.test(e.message) ? 'Gemini terlalu lambat sekarang (dicuba 2 kali). Tekan Cuba lagi sebentar lagi.'
       : /Action tidak dikenali/.test(e.message) ? 'server belum dikemas kini. Tampal Code.gs terbaru dan Deploy versi baharu.' : e.message;
     cQueueSave();
     return false;
@@ -703,7 +727,7 @@ async function runGeminiTest() {
     const i = j.info || {}; let html = row(true, `Server dihubungi (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
     if (!i.keySet) html += row(false, 'GEMINI_API_KEY tiada dalam Script Properties. Semak ejaan nama property.');
     else {
-      html += row(i.keyLooksRight, `API key dijumpai: ${esc(i.keyPreview)}${i.keyLooksRight ? '' : ' — format pelik; key Gemini biasanya bermula "AIza" dan 39 aksara. Semak ruang kosong.'}`);
+      html += row(i.keyLooksRight, `API key dijumpai: ${esc(i.keyPreview)}${i.keyLooksRight ? '' : ' — format tidak dikenali (biasanya bermula "AIza" atau "AQ."). Semak ruang kosong.'}`);
       if (i.fetchError) html += row(false, 'Server tidak dapat menghubungi Gemini: ' + esc(i.fetchError) + ' — jalankan fungsi setup sekali lagi dan benarkan "Connect to an external service".');
       (i.models || []).forEach(m => { html += row(m.code === 200, `${esc(m.model)}: ${m.code === 200 ? 'berfungsi' : 'HTTP ' + esc(m.code) + ' — ' + esc(m.msg)} (${(m.ms / 1000).toFixed(1)}s)`); });
       if ((i.models || []).some(m => m.code === 200)) html += '<div class="hint" style="margin-top:6px">Gemini sedia. Scan resit sepatutnya berfungsi.</div>';

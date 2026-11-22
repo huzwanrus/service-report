@@ -114,7 +114,8 @@ function doPost(e) {
     if (req.action === 'clist') return json_(clist_(req.since, req.owner));
     if (req.action === 'upload') return json_(upload_(req.file));
     if (req.action === 'getfile') return json_(getfile_(req.driveId));
-    if (req.action === 'scanReceipt') return json_(scanReceipt_(req.image, req.mime));
+    if (req.action === 'scanReceipt') return json_(scanReceipt_(req.image, req.mime, req.model));
+    if (req.action === 'scanModels') return json_({ ok: true, models: geminiModels_() });
     if (req.action === 'geminiTest') return json_(geminiTest_());
     return json_({ ok: false, error: 'Action tidak dikenali' });
   } catch (err) {
@@ -420,7 +421,11 @@ function summarize_(tried) {
   return tried.map(function (o) { return o.model + ': HTTP ' + o.code + ' (' + (o.ms / 1000).toFixed(1) + 's)'; }).join('; ');
 }
 
-function scanReceipt_(image, mime) {
+/**
+ * model: jika diberi, hanya model itu dipanggil. App menghantar satu permintaan bagi setiap model
+ * secara serentak dan menggunakan jawapan PALING CEPAT yang berjaya (fetchAll menunggu yang paling lambat).
+ */
+function scanReceipt_(image, mime, model) {
   const key = geminiKey_();
   if (!key) return { ok: false, error: 'GEMINI_API_KEY belum ditetapkan dalam Script Properties' };
   if (!image) return { ok: false, error: 'Tiada gambar resit' };
@@ -457,7 +462,8 @@ function scanReceipt_(image, mime) {
       }
     };
   };
-  const tried = geminiFetchAll_(geminiModels_(), makeBody, key);
+  const list = model && /^gemini-[\w.\-]+$/.test(String(model)) ? [String(model)] : geminiModels_();
+  const tried = geminiFetchAll_(list, makeBody, key);
   for (let i = 0; i < tried.length; i++) {                 // ikut keutamaan: model pertama yang berjaya
     const o = tried[i];
     if (o.code !== 200) continue;
@@ -485,7 +491,8 @@ function geminiTest_() {
   const key = geminiKey_();
   const info = {
     keySet: !!key,
-    keyLooksRight: /^AIza[\w-]{30,}$/.test(key),
+    // format lama "AIza..." (39 aksara) dan format baharu "AQ...." kedua-duanya sah
+    keyLooksRight: !/\s/.test(key) && key.length >= 30 && /^(AIza|AQ\.)/.test(key),
     keyPreview: key ? key.slice(0, 6) + '…' + key.slice(-4) + ' (' + key.length + ' aksara)' : '',
     models: []
   };
