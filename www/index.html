@@ -170,6 +170,8 @@ main{max-width:760px;margin:0 auto;padding:14px 14px calc(110px + var(--safe-b))
 .gemout{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13.5px;display:flex;flex-direction:column;gap:5px;word-break:break-word}
 .gok{color:var(--green)}.gbad{color:var(--red)}
 .citem.moved{animation:moved 1.6s ease}
+#updbar{position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 64px);z-index:70;background:var(--ink);color:#fff;border-radius:12px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:14px;box-shadow:0 6px 20px rgba(0,0,0,.25);max-width:736px;margin:0 auto}
+#updbar button{border:0;background:#fff;color:var(--ink);font-weight:700;border-radius:9px;padding:8px 12px;cursor:pointer}
 @keyframes moved{0%,40%{box-shadow:0 0 0 3px var(--blue);background:var(--blue-soft)}100%{box-shadow:none}}
 @media (max-width:420px){.grid2{grid-template-columns:1fr}.kv{grid-template-columns:96px 1fr}}
 </style>

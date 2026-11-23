@@ -4,7 +4,7 @@
  * Nombor report (JNA001, JNA002 ... JNB001) dikeluarkan oleh server supaya
  * tidak bertindih antara engineer.
  */
-const APP_VERSION = '1.4.4';
+const APP_VERSION = '1.4.5';
 const WORK_TYPES = ['Installation', 'PPM', 'Repair Service', 'Corrective'];
 const COMPANY = {
   name: 'Biz Medic Sdn Bhd',
@@ -919,6 +919,14 @@ async function exportCSV() {
 }
 
 /* ---------------- Start ---------------- */
+function showUpdateBar() {
+  if (document.getElementById('updbar')) return;
+  const d = document.createElement('div'); d.id = 'updbar';
+  d.innerHTML = '<span>Versi baharu app tersedia.</span><button type="button">Muat semula</button>';
+  d.querySelector('button').onclick = async () => { await flushSave(); await qFlushSave(); await cFlushSave(); location.reload(); };
+  document.body.appendChild(d);
+}
+
 async function start() {
   await DB.open();
   S = { ...S, ...((await DB.getMeta('settings')) || {}) };
@@ -940,7 +948,13 @@ async function start() {
   sync({ quiet: true });
   setInterval(() => sync({ quiet: true }), 5 * 60 * 1000);
   if ('serviceWorker' in navigator && !isNative() && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => reg.update()).catch(() => {});
+    // Bila versi baharu dipasang oleh service worker, tawarkan muat semula (skrin semasa masih versi lama)
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) showUpdateBar(); });
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+      reg.update();
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    }).catch(() => {});
   }
 }
 start().catch(e => { document.getElementById('app').textContent = 'Ralat memulakan app: ' + e.message; });
