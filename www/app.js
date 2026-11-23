@@ -4,7 +4,7 @@
  * Nombor report (JNA001, JNA002 ... JNB001) dikeluarkan oleh server supaya
  * tidak bertindih antara engineer.
  */
-const APP_VERSION = '1.4.3';
+const APP_VERSION = '1.4.4';
 const WORK_TYPES = ['Installation', 'PPM', 'Repair Service', 'Corrective'];
 const COMPANY = {
   name: 'Biz Medic Sdn Bhd',

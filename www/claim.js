@@ -23,6 +23,29 @@ const cHas = it => it.code && (cInc(it) > 0 || String(it.desc || it.dest || '').
 const cMonth = iso => { const m = /^\d{4}-(\d{2})/.exec(iso || ''); return m ? C_MON[+m[1] - 1] : ''; };
 const cTitle = c => `${fmtDate(c.claimDate) || '-'}${c.period ? ' (' + c.period + ')' : ''}`;
 
+/** Susun perbelanjaan ikut tarikh: terawal dahulu, tanpa tarikh di akhir. Susunan asal dikekalkan bagi tarikh sama. */
+function byDate(items) {
+  return (items || []).map((it, i) => [it, i]).sort((a, b) => {
+    const da = a[0].date || '9999-99-99', db = b[0].date || '9999-99-99';
+    return da < db ? -1 : da > db ? 1 : a[1] - b[1];
+  }).map(x => x[0]);
+}
+/** Susun item claim yang sedang diedit; nombor semula Resit No. jika semuanya nombor biasa. Pulangkan true jika susunan berubah. */
+function sortClaimItems(c) {
+  const before = c.items.map(i => i.id).join();
+  c.items = byDate(c.items);
+  if (c.items.every(i => !String(i.resit || '').trim() || /^\d+$/.test(String(i.resit).trim()))) c.items.forEach((it, k) => { it.resit = String(k + 1); });
+  return before !== c.items.map(i => i.id).join();
+}
+/** Selepas susunan berubah: lukis semula dan tunjukkan kad yang berpindah. */
+function resortAndShow(it) {
+  if (!ccur || !sortClaimItems(ccur)) { if (ccur) { renderCItems(); } return; }
+  cQueueSave(); renderCItems();
+  const card = it && $(`[data-ci="${ccur.items.indexOf(it)}"]`);
+  if (card) { card.classList.add('moved'); card.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => card.classList.remove('moved'), 1600); }
+  toast('Perbelanjaan disusun ikut tarikh', 1800);
+}
+
 /** Teks lajur Details/Description. Mileage: destination, km x kadar, activity. */
 function cDetails(it) {
   if (it.code !== 'Mileage') return String(it.desc || '').trim();
@@ -143,7 +166,7 @@ async function renderCList() {
 
 function ccard(c) {
   const [label, cls] = STATUS[c.status] || STATUS.draft;
-  const items = (c.items || []).filter(cHas);
+  const items = byDate((c.items || []).filter(cHas));
   const codes = [...new Set(items.map(i => i.code))].join(', ');
   return `<a class="card" href="#/cview/${encodeURIComponent(c.id)}">
     <div class="r1"><span class="no">${esc(cTitle(c))}</span><span class="badge ${cls}">${label}</span></div>
@@ -286,6 +309,10 @@ function renderCItems() {
     $('#cGrand').textContent = 'RM ' + money(cTotal(ccur));
     cQueueSave();
   }));
+  $$('[data-cf="date"]', box).forEach(el => el.addEventListener('change', () => {
+    const it = ccur.items[+el.closest('[data-ci]').dataset.ci];
+    setTimeout(() => resortAndShow(it), 50);
+  }));
   $$('[data-crm]', box).forEach(b => b.onclick = async () => {
     const i = +b.dataset.crm, it = ccur.items[i];
     if ((cInc(it) > 0 || it.receiptId) && !confirm('Buang perbelanjaan ini?')) return;
@@ -369,7 +396,8 @@ async function scanFiles(files) {
     if (!ccur || !ccur.items.includes(added[k])) return;   // pengguna telah keluar dari borang
     renderCItems(); $('#cGrand').textContent = 'RM ' + money(cTotal(ccur));
   }
-  toast(ok === added.length ? `${ok} resit dibaca. Sila semak setiap perbelanjaan.` : `${ok}/${added.length} resit dibaca. Semak yang bertanda.`, 3500);
+  if (ccur && sortClaimItems(ccur)) { cQueueSave(); renderCItems(); $('#cGrand').textContent = 'RM ' + money(cTotal(ccur)); }
+  toast((ok === added.length ? `${ok} resit dibaca. ` : `${ok}/${added.length} resit dibaca. `) + 'Disusun ikut tarikh; sila semak setiap perbelanjaan.', 3500);
 }
 
 /** Baca satu resit dan isi medan yang masih kosong. Pulangkan true jika berjaya. */
@@ -468,7 +496,7 @@ async function pickReport(i) {
     it.date = r.reportDate || it.date;
     it.dest = [r.client, r.location].map(v => String(v || '').trim()).filter(Boolean).join(', ');
     it.activity = [(r.workTypes || []).join('/'), r.equipment, r.serial ? 'SN ' + r.serial : '', r.reportNo ? '(' + r.reportNo + ')' : ''].filter(Boolean).join(' ');
-    ov.remove(); cQueueSave(); renderCItems();
+    ov.remove(); cQueueSave(); resortAndShow(it);
   });
 }
 
@@ -487,6 +515,7 @@ async function submitClaim() {
   });
   if (miss.length) { toast('Sila isi: ' + miss.slice(0, 4).join(', ') + (miss.length > 4 ? '…' : ''), 4000); return; }
   ccur.items = items;
+  sortClaimItems(ccur);
   items.forEach(it => { if (it.scan === 'ok' || it.scan === 'check') it.scan = 'edited'; delete it.scanDup; });
   ccur.status = 'pending'; ccur.updatedAt = new Date().toISOString();
   clearTimeout(csaveT); csaveT = null;
@@ -508,7 +537,7 @@ async function renderCView(id) {
   setTitle('Claim ' + cTitle(c));
   const [label, cls] = STATUS[c.status] || STATUS.draft;
   const canShare = isNative() || !!(navigator.canShare && navigator.canShare({ files: [new File(['x'], 'x.pdf', { type: 'application/pdf' })] }));
-  const items = (c.items || []).filter(cHas);
+  const items = byDate((c.items || []).filter(cHas));
   const nRc = items.filter(i => i.receiptId).length;
   $('#app').innerHTML = `
     <div class="noBox">
@@ -557,7 +586,7 @@ async function makeClaimPDF(c) {
   const FS = 9, LH = FS * 1.25 * 25.4 / 72, ASC = LH * 0.78, PX = 1.3;
   const font = (st = 'normal', sz = FS) => { doc.setFont('helvetica', st); doc.setFontSize(sz); doc.setTextColor(0, 0, 0); };
   doc.setLineWidth(0.25); doc.setDrawColor(0);
-  const items = (c.items || []).filter(cHas);
+  const items = byDate((c.items || []).filter(cHas));
 
   // Kepala borang
   font('bold', 12); doc.text('Expense Claim Reimbursement Form', cx[2], 20);
@@ -654,7 +683,7 @@ async function makeClaimXLSX(c) {
   const buf = await (await fetch('claim_template.xlsx')).arrayBuffer();
   const wb = new window.ExcelJS.Workbook(); await wb.xlsx.load(buf);
   const ws = wb.worksheets[0];
-  const items = (c.items || []).filter(cHas);
+  const items = byDate((c.items || []).filter(cHas));
   const FIRST = 11, TPL_ROWS = 7;                                // baris item 11–17 dalam template
   const extra = Math.max(0, items.length - TPL_ROWS);
   if (extra) ws.duplicateRow(FIRST + TPL_ROWS - 1, extra, true);
