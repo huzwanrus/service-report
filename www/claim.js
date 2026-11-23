@@ -345,7 +345,8 @@ let SCAN_MODELS = null;
 async function raceScan(image) {
   if (!SCAN_MODELS) {
     try { SCAN_MODELS = (await api('scanModels', {}, { timeout: 30000 })).models; }
-    catch (e) { if (/Action tidak dikenali/.test(e.message)) throw e; SCAN_MODELS = null; }
+    // server versi lama (tiada scanModels): guna cara lama, server pilih model sendiri
+    catch (e) { SCAN_MODELS = /Action tidak dikenali/.test(e.message) ? [] : null; }
   }
   const models = SCAN_MODELS && SCAN_MODELS.length ? SCAN_MODELS : [null];   // null: server pilih sendiri
   const once = () => Promise.any(models.map(m => api('scanReceipt', { image, mime: 'image/jpeg', ...(m ? { model: m } : {}) }, { timeout: 60000 })));
